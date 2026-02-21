@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 import xbmc
 import sys
 import logging
@@ -275,8 +274,7 @@ def run():
                             "'%s' is already marked as watched." % showTitle)
                         return
 
-                    data['seasons'] = dict((k, v)
-                                           for k, v in list(s.items()) if v)
+                    data['seasons'] = {k: v for k, v in s.items() if v}
                 else:
                     logger.debug(
                         "Error getting episode details for '%s' from Kodi." % showTitle)
@@ -380,8 +378,7 @@ def run():
                         if e['playcount'] == 0:
                             s[season].append(e['episode'])
 
-                    data['seasons'] = dict((k, v)
-                                           for k, v in list(s.items()) if v)
+                    data['seasons'] = {k: v for k, v in s.items() if v}
                 else:
                     logger.debug(
                         "Error getting episode details for '%s' from Kodi." % showTitle)

@@ -774,6 +774,10 @@ msgctxt "#32191"
 msgid "Password"
 msgstr ""
 
+msgctxt "#32192"
+msgid "Don't save playback progress"
+msgstr ""
+
 msgctxt "#42191"
 msgid "Optional password needed to authenticate with the proxy."
 msgstr ""

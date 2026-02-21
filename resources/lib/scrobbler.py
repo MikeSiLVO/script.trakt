@@ -1,6 +1,3 @@
-# -*- coding: utf-8 -*-
-#
-
 import xbmc
 import time
 import logging
@@ -13,25 +10,23 @@ logger = logging.getLogger(__name__)
 
 
 class Scrobbler:
-    traktapi = None
-    isPlaying = False
-    isPaused = False
-    stopScrobbler = False
-    isPVR = False
-    isMultiPartEpisode = False
-    lastMPCheck = 0
-    curMPEpisode = 0
-    videoDuration = 1
-    watchedTime = 0
-    pausedAt = 0
-    curVideo = None
-    curVideoInfo = None
-    playlistIndex = 0
-    traktShowSummary = None
-    videosToRate = []
-
     def __init__(self, api):
         self.traktapi = api
+        self.isPlaying = False
+        self.isPaused = False
+        self.stopScrobbler = False
+        self.isPVR = False
+        self.isMultiPartEpisode = False
+        self.lastMPCheck = 0
+        self.curMPEpisode = 0
+        self.videoDuration = 1
+        self.watchedTime = 0
+        self.pausedAt = 0
+        self.curVideo = None
+        self.curVideoInfo = None
+        self.playlistIndex = 0
+        self.traktShowSummary = None
+        self.videosToRate = []
 
     def _currentEpisode(self, watchedPercent, episodeCount):
         split = 100 / episodeCount
@@ -63,6 +58,9 @@ class Scrobbler:
                 )
             elif self.playlistIndex == position:
                 self.watchedTime = t
+                # Re-query duration if player hadn't resolved it at start
+                if self.videoDuration == 0:
+                    self.videoDuration = xbmc.Player().getTotalTime()
             else:
                 logger.debug(
                     "Current playlist item changed! Not updating time! (%d -> %d)"
@@ -114,6 +112,8 @@ class Scrobbler:
                         {"jsonrpc": "2.0", "method": "Player.GetActivePlayers", "id": 1}
                     )
                     logger.debug("Scrobble - activePlayers: %s" % activePlayers)
+                    if not activePlayers:
+                        return
                     playerId = int(activePlayers[0]["playerid"])
                     logger.debug("Scrobble - Doing Player.GetItem kodiJsonRequest")
                     result = kodiUtilities.kodiJsonRequest(
@@ -239,15 +239,15 @@ class Scrobbler:
                 else:
                     self.videoDuration = xbmc.Player().getTotalTime()
             except Exception as e:
-                logger.debug("Suddenly stopped watching item: %s" % e.message)
+                logger.debug("Suddenly stopped watching item: %s" % str(e))
                 self.curVideo = None
                 return
 
             if self.videoDuration == 0:
                 if utilities.isMovie(self.curVideo["type"]):
-                    self.videoDuration = 90
+                    self.videoDuration = 90 * 60  # 90 minutes in seconds
                 elif utilities.isEpisode(self.curVideo["type"]):
-                    self.videoDuration = 30
+                    self.videoDuration = 30 * 60  # 30 minutes in seconds
                 else:
                     self.videoDuration = 1
 
@@ -469,7 +469,7 @@ class Scrobbler:
         self.transitionCheck(isSeek=True)
 
     def playbackEnded(self):
-        if not self.isPVR:
+        if not self.isPVR and self.curVideoInfo is not None:
             self.videosToRate.append(self.curVideoInfo)
         if not self.isPlaying:
             return
@@ -498,10 +498,9 @@ class Scrobbler:
         self.playlistIndex = 0
 
     def __calculateWatchedPercent(self):
-        # we need to floor this, so this calculation yields the same result as the playback progress calculation
         floored = math.floor(self.videoDuration)
         if floored != 0:
-            return (self.watchedTime / floored) * 100
+            return min((self.watchedTime / floored) * 100, 100.0)
         else:
             return 0
 
@@ -514,12 +513,23 @@ class Scrobbler:
         scrobbleEpisodeOption = kodiUtilities.getSettingAsBool("scrobble_episode")
 
         watchedPercent = self.__calculateWatchedPercent()
+
+        # Trakt returns 422 for stop with progress < 1%, skip the call
+        if status == "stop" and watchedPercent < 1.0:
+            logger.debug("Progress too low (%.1f%%), skipping stop scrobble" % watchedPercent)
+            return None
+
         if utilities.isMovie(self.curVideo["type"]) and scrobbleMovieOption:
             response = self.traktapi.scrobbleMovie(
                 self.curVideoInfo, watchedPercent, status
             )
             if response is not None:
-                self.__scrobbleNotification(response)
+                if status == "stop":
+                    self.__clearPlaybackProgress(response)
+                if response.get("duplicate"):
+                    logger.debug("Movie already scrobbled recently, skipping notification")
+                else:
+                    self.__scrobbleNotification(response)
                 logger.debug("Scrobble response: %s" % str(response))
                 return response
             else:
@@ -585,8 +595,14 @@ class Scrobbler:
                         )
 
             if response is not None:
+                if status == "stop":
+                    self.__clearPlaybackProgress(response)
+                if response.get("duplicate"):
+                    logger.debug("Episode already scrobbled recently, skipping notification")
+                    return response
+
                 # Don't scrobble incorrect episode, episode numbers can differ from database. ie Aired vs. DVD order. Use fuzzy logic to match episode title.
-                if self.isPVR and not utilities._fuzzyMatch(
+                if self.isPVR and "episode" in response and not utilities._fuzzyMatch(
                     self.curVideoInfo["title"], response["episode"]["title"], 50.0
                 ):
                     logger.debug(
@@ -608,6 +624,26 @@ class Scrobbler:
                     "Failed to scrobble episode: %s | %s | %s | %s"
                     % (self.traktShowSummary, self.curVideoInfo, watchedPercent, status)
                 )
+
+    def __clearPlaybackProgress(self, response):
+        """If setting enabled and stop resulted in a pause (not a scrobble),
+        delete the playback progress entry from Trakt."""
+        if not kodiUtilities.getSettingAsBool("clear_playback_progress"):
+            return
+        if not response or response.get("action") != "pause":
+            return
+
+        mediaType = self.curVideo.get("type")
+        # Extract trakt ID from the response
+        traktId = None
+        if mediaType == "movie" and "movie" in response:
+            traktId = response["movie"].get("ids", {}).get("trakt")
+        elif mediaType == "episode" and "episode" in response:
+            traktId = response["episode"].get("ids", {}).get("trakt")
+
+        if traktId:
+            logger.debug("Clearing playback progress for %s trakt:%s" % (mediaType, traktId))
+            self.traktapi.removePlaybackProgressForItem(mediaType, traktId)
 
     def __scrobbleNotification(self, info):
         if not self.curVideoInfo:

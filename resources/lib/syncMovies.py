@@ -1,6 +1,3 @@
-# -*- coding: utf-8 -*-
-
-import copy
 import logging
 
 from resources.lib import kodiUtilities, utilities
@@ -98,7 +95,7 @@ class SyncMovies:
                 },
             }
         )
-        if data["limits"]["total"] == 0:
+        if not data or data["limits"]["total"] == 0:
             logger.debug("[Movies Sync] Kodi JSON request was empty.")
             return
 
@@ -126,11 +123,9 @@ class SyncMovies:
         if kodiUtilities.getSettingAsBool("trakt_sync_ratings"):
             traktMovies = self.sync.traktapi.getMoviesRated(traktMovies)
 
-        traktMovies = list(traktMovies.items())
-
         self.sync.UpdateProgress(24, line2=kodiUtilities.getString(32083))
         movies = []
-        for _, movie in traktMovies:
+        for _, movie in traktMovies.items():
             movie = movie.to_dict()
 
             movies.append(movie)
@@ -179,12 +174,9 @@ class SyncMovies:
             kodiUtilities.getSettingAsBool("add_movies_to_trakt")
             and not self.sync.IsCanceled()
         ):
-            addTraktMovies = copy.deepcopy(traktMovies)
-            addKodiMovies = copy.deepcopy(kodiMovies)
-
             traktMoviesToAdd = utilities.compareMovies(
-                addKodiMovies,
-                addTraktMovies,
+                kodiMovies,
+                traktMovies,
                 kodiUtilities.getSettingAsBool("scrobble_fallback"),
             )
             utilities.sanitizeMovies(traktMoviesToAdd)
@@ -218,7 +210,7 @@ class SyncMovies:
                 self.sync.traktapi.addToCollection(moviesToAdd)
             except Exception as ex:
                 message = utilities.createError(ex)
-                logging.fatal(message)
+                logger.fatal(message)
 
             self.sync.UpdateProgress(
                 toPercent, line2=kodiUtilities.getString(32085) % len(traktMoviesToAdd)
@@ -231,13 +223,10 @@ class SyncMovies:
             kodiUtilities.getSettingAsBool("clean_trakt_movies")
             and not self.sync.IsCanceled()
         ):
-            removeTraktMovies = copy.deepcopy(traktMovies)
-            removeKodiMovies = copy.deepcopy(kodiMovies)
-
             logger.debug("[Movies Sync] Starting to remove.")
             traktMoviesToRemove = utilities.compareMovies(
-                removeTraktMovies,
-                removeKodiMovies,
+                traktMovies,
+                kodiMovies,
                 kodiUtilities.getSettingAsBool("scrobble_fallback"),
             )
             utilities.sanitizeMovies(traktMoviesToRemove)
@@ -272,7 +261,7 @@ class SyncMovies:
                 self.sync.traktapi.removeFromCollection(moviesToRemove)
             except Exception as ex:
                 message = utilities.createError(ex)
-                logging.fatal(message)
+                logger.fatal(message)
 
             self.sync.UpdateProgress(
                 toPercent,
@@ -286,12 +275,9 @@ class SyncMovies:
             kodiUtilities.getSettingAsBool("trakt_movie_playcount")
             and not self.sync.IsCanceled()
         ):
-            updateTraktTraktMovies = copy.deepcopy(traktMovies)
-            updateTraktKodiMovies = copy.deepcopy(kodiMovies)
-
             traktMoviesToUpdate = utilities.compareMovies(
-                updateTraktKodiMovies,
-                updateTraktTraktMovies,
+                kodiMovies,
+                traktMovies,
                 kodiUtilities.getSettingAsBool("scrobble_fallback"),
                 watched=True,
             )
@@ -340,7 +326,7 @@ class SyncMovies:
                     self.sync.traktapi.addToHistory(params)
                 except Exception as ex:
                     message = utilities.createError(ex)
-                    logging.fatal(message)
+                    logger.fatal(message)
                     errorcount += 1
 
             logger.debug("[Movies Sync] Movies updated: %d error(s)" % errorcount)
@@ -354,12 +340,9 @@ class SyncMovies:
             kodiUtilities.getSettingAsBool("kodi_movie_playcount")
             and not self.sync.IsCanceled()
         ):
-            updateKodiTraktMovies = copy.deepcopy(traktMovies)
-            updateKodiKodiMovies = copy.deepcopy(kodiMovies)
-
             kodiMoviesToUpdate = utilities.compareMovies(
-                updateKodiTraktMovies,
-                updateKodiKodiMovies,
+                traktMovies,
+                kodiMovies,
                 kodiUtilities.getSettingAsBool("scrobble_fallback"),
                 watched=True,
                 restrict=True,
@@ -430,12 +413,9 @@ class SyncMovies:
             and traktMovies
             and not self.sync.IsCanceled()
         ):
-            updateKodiTraktMovies = copy.deepcopy(traktMovies)
-            updateKodiKodiMovies = copy.deepcopy(kodiMovies)
-
             kodiMoviesToUpdate = utilities.compareMovies(
-                updateKodiTraktMovies["movies"],
-                updateKodiKodiMovies,
+                traktMovies["movies"],
+                kodiMovies,
                 kodiUtilities.getSettingAsBool("scrobble_fallback"),
                 restrict=True,
                 playback=True,
@@ -516,12 +496,9 @@ class SyncMovies:
             and traktMovies
             and not self.sync.IsCanceled()
         ):
-            updateKodiTraktMovies = copy.deepcopy(traktMovies)
-            updateKodiKodiMovies = copy.deepcopy(kodiMovies)
-
             traktMoviesToUpdate = utilities.compareMovies(
-                updateKodiKodiMovies,
-                updateKodiTraktMovies,
+                kodiMovies,
+                traktMovies,
                 kodiUtilities.getSettingAsBool("scrobble_fallback"),
                 rating=True,
             )
@@ -547,8 +524,8 @@ class SyncMovies:
                 self.sync.traktapi.addRating(moviesRatings)
 
             kodiMoviesToUpdate = utilities.compareMovies(
-                updateKodiTraktMovies,
-                updateKodiKodiMovies,
+                traktMovies,
+                kodiMovies,
                 kodiUtilities.getSettingAsBool("scrobble_fallback"),
                 restrict=True,
                 rating=True,

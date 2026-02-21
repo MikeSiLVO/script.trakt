@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-
 import xbmcaddon
 import xbmcgui
 from resources.lib.utilities import isMovie, isShow, isSeason, isEpisode
@@ -22,7 +20,7 @@ class traktContextMenu(xbmcgui.WindowXMLDialog):
     action = None
 
     def __new__(cls, media_type=None, buttons=None):
-        return super(traktContextMenu, cls).__new__(
+        return super().__new__(
             cls,
             "script-trakt-ContextMenu.xml",
             __addon__.getAddonInfo("path"),
@@ -33,7 +31,7 @@ class traktContextMenu(xbmcgui.WindowXMLDialog):
     def __init__(self, *args, **kwargs):
         self.buttons = kwargs["buttons"]
         self.media_type = kwargs["media_type"]
-        super(traktContextMenu, self).__init__()
+        super().__init__()
 
     def onInit(self):
         mange_string = (

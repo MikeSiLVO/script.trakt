@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 import logging
 import xbmcaddon
 from resources.lib import script
