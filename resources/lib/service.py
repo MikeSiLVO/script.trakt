@@ -484,7 +484,12 @@ class traktPlayer(xbmc.Player):
         logger.debug("[traktPlayer] Initalized.")
 
     # called when kodi starts playing a file
+<<<<<<< HEAD
     def onAVStarted(self) -> None:
+=======
+    def onAVStarted(self):
+        logger.info("[traktPlayer] Playback started")
+>>>>>>> 3c7fa45 (Promote key log messages to INFO so they're visible without debug mode)
         xbmc.sleep(1000)
         self.media_type = None
         self.media_id = None

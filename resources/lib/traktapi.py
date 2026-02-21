@@ -39,7 +39,7 @@ class traktAPI:
     authDialog: Optional[deviceAuthDialog.DeviceAuthDialog] = None
 
     def __init__(self, force: bool = False) -> None:
-        logger.debug("Initializing.")
+        logger.info("Initializing.")
 
         proxyURL = checkAndConfigureProxy()
         if proxyURL:
