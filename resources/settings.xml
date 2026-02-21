@@ -122,6 +122,26 @@
 					<level>3</level>
 					<visible>false</visible>
 				</setting>
+				<setting id="last_activities_all" type="string" label="last_activities_all">
+					<constraints>
+						<allowempty>true</allowempty>
+					</constraints>
+					<control type="edit" format="string" />
+					<default />
+					<enable>false</enable>
+					<level>4</level>
+					<visible>false</visible>
+				</setting>
+				<setting id="kodi_library_dirty" type="string" label="kodi_library_dirty">
+					<constraints>
+						<allowempty>true</allowempty>
+					</constraints>
+					<control type="edit" format="string" />
+					<default>false</default>
+					<enable>false</enable>
+					<level>4</level>
+					<visible>false</visible>
+				</setting>
 			</group>
 		</category>
 		<category id="exclusions" label="32016" help="">
@@ -503,6 +523,11 @@
 					<level>1</level>
 				</setting>
 				<setting id="scrobble_secondary_title" type="boolean" label="32184" help="">
+					<control type="toggle" />
+					<default>false</default>
+					<level>1</level>
+				</setting>
+				<setting id="clear_playback_progress" type="boolean" label="32192" help="">
 					<control type="toggle" />
 					<default>false</default>
 					<level>1</level>

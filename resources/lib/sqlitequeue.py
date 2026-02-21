@@ -1,15 +1,11 @@
-# -*- coding: utf-8 -*-
-
 import os
 import sqlite3
 from json import loads, dumps
 
 from time import sleep
 
-try:
-    from _thread import get_ident
-except ImportError:
-    from _dummy_thread import get_ident
+import threading
+from _thread import get_ident
 
 import xbmcvfs
 import xbmcaddon
@@ -21,7 +17,7 @@ logger = logging.getLogger(__name__)
 __addon__ = xbmcaddon.Addon('script.trakt')
 
 # code from http://flask.pocoo.org/snippets/88/ with some modifications
-class SqliteQueue(object):
+class SqliteQueue:
 
     _create = (
                 'CREATE TABLE IF NOT EXISTS queue '
@@ -69,10 +65,19 @@ class SqliteQueue(object):
                 yield loads(obj_buffer)
 
     def _get_conn(self) -> sqlite3.Connection:
-        id = get_ident()
-        if id not in self._connection_cache:
-            self._connection_cache[id] = sqlite3.Connection(self.path, timeout=60)
-        return self._connection_cache[id]
+        tid = get_ident()
+        # Evict connections from dead threads to prevent unbounded cache growth
+        alive_tids = {t.ident for t in threading.enumerate()}
+        stale_tids = [t for t in self._connection_cache if t not in alive_tids]
+        for stale_tid in stale_tids:
+            try:
+                self._connection_cache[stale_tid].close()
+            except Exception:
+                pass
+            del self._connection_cache[stale_tid]
+        if tid not in self._connection_cache:
+            self._connection_cache[tid] = sqlite3.Connection(self.path, timeout=60)
+        return self._connection_cache[tid]
 
     def purge(self) -> None:
         with self._get_conn() as conn:
@@ -89,13 +94,14 @@ class SqliteQueue(object):
         max_wait = 2
         tries = 0
         with self._get_conn() as conn:
-            id = None
+            row_id = None
+            obj_buffer = None
             while keep_pooling:
                 conn.execute(self._write_lock)
                 cursor = conn.execute(self._get)
                 row = cursor.fetchone()
                 if row:
-                    id, obj_buffer = row
+                    row_id, obj_buffer = row
                     keep_pooling = False
                 else:
                     conn.commit()  # unlock the database
@@ -105,15 +111,14 @@ class SqliteQueue(object):
                     tries += 1
                     sleep(wait)
                     wait = min(max_wait, tries / 10 + wait)
-            if id:
-                conn.execute(self._del, (id,))
+            if row_id:
+                conn.execute(self._del, (row_id,))
                 return loads(obj_buffer)
         return None
 
     def peek(self) -> Optional[Any]:
         with self._get_conn() as conn:
-            cursor = conn.execute(self._peek)
-            row = cursor.fetchone()
+            row = conn.execute(self._peek).fetchone()
             if row:
                 return loads(row[0])
             return None

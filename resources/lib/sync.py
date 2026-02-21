@@ -1,32 +1,22 @@
-# -*- coding: utf-8 -*-
-
-
 import logging
 from typing import Any
 
 import xbmc
 import xbmcgui
 from resources.lib import syncEpisodes, syncMovies
-from resources.lib.kodiUtilities import getSettingAsBool
+from resources.lib.kodiUtilities import getSetting, getSettingAsBool, setSetting
 
-progress = xbmcgui.DialogProgress()
 logger = logging.getLogger(__name__)
 
 
 class Sync():
-    traktapi: Any = None
-    show_progress: bool = False
-    run_silent: bool = False
-    library: str = "all"
-    sync_on_update: bool = False
-    notify: bool = False
-    notify_during_playback: bool = False
-
-    def __init__(self, show_progress: bool = False, run_silent: bool = False, library: str = "all", api: Any = None) -> None:
+    def __init__(self, show_progress: bool = False, run_silent: bool = False, library: str = "all", api: Any = None, manual: bool = False) -> None:
         self.traktapi = api
+        self.progress = xbmcgui.DialogProgress()
         self.show_progress = show_progress
         self.run_silent = run_silent
         self.library = library
+        self.manual = manual
         if self.show_progress and self.run_silent:
             logger.debug("Sync is being run silently.")
         self.sync_on_update = getSettingAsBool('sync_on_update')
@@ -64,9 +54,13 @@ class Sync():
     def sync(self) -> None:
         logger.debug("Starting synchronization with Trakt.tv")
 
+        if not self.manual and self.__canSkipSync():
+            logger.debug("[Sync] No changes on Trakt or Kodi since last sync, skipping.")
+            return
+
         if self.__syncCheck('movies'):
             if self.library in ["all", "movies"]:
-                syncMovies.SyncMovies(self, progress)
+                syncMovies.SyncMovies(self, self.progress)
             else:
                 logger.debug(
                     "Movie sync is being skipped for this manual sync.")
@@ -76,7 +70,7 @@ class Sync():
         if self.__syncCheck('episodes'):
             if self.library in ["all", "episodes"]:
                 if not (self.__syncCheck('movies') and self.IsCanceled()):
-                    syncEpisodes.SyncEpisodes(self, progress)
+                    syncEpisodes.SyncEpisodes(self, self.progress)
                 else:
                     logger.debug(
                         "Episode sync is being skipped because movie sync was canceled.")
@@ -86,10 +80,55 @@ class Sync():
         else:
             logger.debug("Episode sync is disabled, skipping.")
 
+        self.__saveLastActivities()
         logger.debug("[Sync] Finished synchronization with Trakt.tv")
 
+    def __canSkipSync(self) -> bool:
+        """Check if sync can be skipped because nothing changed on either side."""
+        if getSettingAsBool("kodi_library_dirty"):
+            logger.debug("[Sync] Kodi library is dirty, cannot skip sync.")
+            return False
+
+        try:
+            activities = self.traktapi.getLastActivities()
+        except Exception as ex:
+            logger.debug("[Sync] Failed to fetch last_activities: %s" % ex)
+            return False
+
+        if not activities or "all" not in activities:
+            logger.debug("[Sync] Invalid last_activities response, cannot skip sync.")
+            return False
+
+        cached = getSetting("last_activities_all")
+        current = activities["all"]
+
+        if not cached:
+            logger.debug("[Sync] No cached last_activities, running full sync.")
+            return False
+
+        if current == cached:
+            logger.debug("[Sync] last_activities unchanged (%s), skipping sync." % current)
+            return True
+
+        logger.debug("[Sync] last_activities changed (cached=%s, current=%s)." % (cached, current))
+        return False
+
+    def __saveLastActivities(self) -> None:
+        """Cache post-sync timestamps and clear the dirty flag."""
+        try:
+            activities = self.traktapi.getLastActivities()
+        except Exception as ex:
+            logger.debug("[Sync] Failed to fetch last_activities for caching: %s" % ex)
+            return
+
+        if activities and "all" in activities:
+            setSetting("last_activities_all", activities["all"])
+            logger.debug("[Sync] Cached last_activities: %s" % activities["all"])
+
+        setSetting("kodi_library_dirty", "false")
+
     def IsCanceled(self) -> bool:
-        if self.show_progress and not self.run_silent and progress.iscanceled():
+        if self.show_progress and not self.run_silent and self.progress.iscanceled():
             logger.debug("Sync was canceled by user.")
             return True
         else:
@@ -113,4 +152,4 @@ class Sync():
 
             percent = args[0]
             message = f'{line1}\n{line2}\n{line3}'
-            progress.update(percent, message)
+            self.progress.update(percent, message)

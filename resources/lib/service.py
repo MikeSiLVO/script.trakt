@@ -1,9 +1,7 @@
-# -*- coding: utf-8 -*-
 import threading
 import logging
 from typing import Any, Dict, Optional, Callable
 import xbmc
-import time
 import xbmcgui
 import re
 import urllib.request
@@ -23,13 +21,11 @@ logger = logging.getLogger(__name__)
 
 
 class traktService:
-    scrobbler: Optional[Scrobbler] = None
-    updateTagsThread: Optional[threading.Thread] = None
-    syncThread: Optional[threading.Thread] = None
-    dispatchQueue: sqlitequeue.SqliteQueue = sqlitequeue.SqliteQueue()
-
     def __init__(self) -> None:
-        threading.Thread.name = "trakt"
+        self.scrobbler = None
+        self.updateTagsThread = None
+        self.syncThread = None
+        self.dispatchQueue = sqlitequeue.SqliteQueue()
 
     def _dispatchQueue(self, data: Dict) -> None:
         logger.debug("Queuing for dispatch: %s" % data)
@@ -51,10 +47,12 @@ class traktService:
             elif action == "seek" or action == "seekchapter":
                 self.scrobbler.playbackSeek()
             elif action == "scanFinished":
+                kodiUtilities.setSetting("kodi_library_dirty", "true")
                 if kodiUtilities.getSettingAsBool("sync_on_update"):
                     logger.debug("Performing sync after library update.")
                     self.doSync()
             elif action == "databaseCleaned":
+                kodiUtilities.setSetting("kodi_library_dirty", "true")
                 if kodiUtilities.getSettingAsBool("sync_on_update") and (
                     kodiUtilities.getSettingAsBool("clean_trakt_movies")
                     or kodiUtilities.getSettingAsBool("clean_trakt_episodes")
@@ -98,8 +96,13 @@ class traktService:
 
         logger.debug("Service thread starting.")
 
-        # purge queue before doing anything
-        self.dispatchQueue.purge()
+        # Log and discard stale queue items from previous session
+        stale_count = len(self.dispatchQueue)
+        if stale_count > 0:
+            logger.debug("Discarding %d stale item(s) from dispatch queue." % stale_count)
+            for item in self.dispatchQueue:
+                logger.debug("Discarded queue item: %s" % item)
+            self.dispatchQueue.purge()
 
         # setup event driven classes
         self.Player = traktPlayer(action=self._dispatchQueue)
@@ -121,7 +124,7 @@ class traktService:
                 logger.debug("Queued dispatch: %s" % data)
                 self._dispatch(data)
 
-            if xbmc.Player().isPlayingVideo():
+            if self.Player.isPlayingVideo():
                 self.scrobbler.transitionCheck()
 
             if self.Monitor.waitForAbort(1):
@@ -364,7 +367,7 @@ class traktService:
             logger.debug(
                 "doMarkWatched(): '%s - Season %d' has %d episode(s) that are going to be marked as watched."
                 % (
-                    data["id"],
+                    data["ids"],
                     data["season"],
                     len(summaryInfo["shows"][0]["seasons"][0]["episodes"]),
                 )
@@ -423,6 +426,7 @@ class syncThread(threading.Thread):
             run_silent=self._runSilent,
             library=self._library,
             api=globals.traktapi,
+            manual=self._isManual,
         )
         sync.sync()
 
@@ -482,8 +486,8 @@ class traktPlayer(xbmc.Player):
     # called when kodi starts playing a file
     def onAVStarted(self) -> None:
         xbmc.sleep(1000)
-        self.type = None
-        self.id = None
+        self.media_type = None
+        self.media_id = None
 
         # take the user start scrobble offset into account
         scrobbleStartOffset = (
@@ -495,7 +499,7 @@ class traktPlayer(xbmc.Player):
             # check each 10 seconds if we can abort or proceed
             while scrobbleStartOffset > waitedFor:
                 waitedFor += waitFor
-                time.sleep(waitFor)
+                xbmc.sleep(waitFor * 1000)
                 if not self.isPlayingVideo():
                     logger.debug(
                         "[traktPlayer] Playback stopped before reaching the scrobble offset"
@@ -511,6 +515,9 @@ class traktPlayer(xbmc.Player):
             logger.debug(
                 "[traktPlayer] onAVStarted() - activePlayers: %s" % activePlayers
             )
+            if not activePlayers:
+                logger.debug("[traktPlayer] onAVStarted() - No active players, bailing.")
+                return
             playerId = int(activePlayers[0]["playerid"])
             logger.debug(
                 "[traktPlayer] onAVStarted() - Doing Player.GetItem kodiJsonRequest"
@@ -532,14 +539,14 @@ class traktPlayer(xbmc.Player):
                 _filename = None
                 try:
                     _filename = self.getPlayingFile()
-                except:  # noqa: E722
+                except Exception:
                     logger.debug(
                         "[traktPlayer] onAVStarted() - Exception trying to get playing filename, player suddenly stopped."
                     )
                     return
 
-                custom_proprties = result["item"].get("customproperties")
-                if custom_proprties and "script.trakt.exclude" in custom_proprties:
+                custom_properties = result["item"].get("customproperties")
+                if custom_properties and "script.trakt.exclude" in custom_properties:
                     logger.debug(
                         "[traktPlayer] onAVStarted() - '%s' has exclusion property, ignoring."
                         % _filename
@@ -558,19 +565,19 @@ class traktPlayer(xbmc.Player):
                         "[traktPlayer] Setting is enabled to try scrobbling mythtv pvr recording, if necessary."
                     )
 
-                self.type = result["item"]["type"]
+                self.media_type = result["item"]["type"]
                 data = {"action": "started"}
                 # check type of item
-                if "id" not in result["item"] or self.type == "channel":
+                if "id" not in result["item"] or self.media_type == "channel":
                     # get non-library details by infolabel (ie. PVR, plugins, etc.)
-                    self.type, data = kodiUtilities.getInfoLabelDetails(result)
-                elif self.type == "episode" or self.type == "movie":
+                    self.media_type, data = kodiUtilities.getInfoLabelDetails(result)
+                elif self.media_type == "episode" or self.media_type == "movie":
                     # get library id
-                    self.id = result["item"]["id"]
-                    data["id"] = self.id
-                    data["type"] = self.type
+                    self.media_id = result["item"]["id"]
+                    data["id"] = self.media_id
+                    data["type"] = self.media_type
 
-                    if self.type == "episode":
+                    if self.media_type == "episode":
                         logger.debug(
                             "[traktPlayer] onAVStarted() - Doing multi-part episode check."
                         )
@@ -579,7 +586,7 @@ class traktPlayer(xbmc.Player):
                                 "jsonrpc": "2.0",
                                 "method": "VideoLibrary.GetEpisodeDetails",
                                 "params": {
-                                    "episodeid": self.id,
+                                    "episodeid": self.media_id,
                                     "properties": [
                                         "tvshowid",
                                         "season",
@@ -636,7 +643,7 @@ class traktPlayer(xbmc.Player):
                                         )
                 elif (
                     kodiUtilities.getSettingAsBool("scrobble_mythtv_pvr")
-                    and self.type == "unknown"
+                    and self.media_type == "unknown"
                     and result["item"]["label"]
                 ):
                     # If we have label/id but no show type, then this might be a PVR recording.
@@ -767,7 +774,7 @@ class traktPlayer(xbmc.Player):
                     except ValueError:
                         epYear = None
                     logger.debug(
-                        "[traktPlayer] onAVStarted() - verified episode year: %d"
+                        "[traktPlayer] onAVStarted() - verified episode year: %s"
                         % epYear
                     )
                     # All right, now we have the show name, episode name, and (maybe) episode year. All good, but useless for
@@ -811,7 +818,7 @@ class traktPlayer(xbmc.Player):
                             )
                         else:
                             # OK, now we have a episode object to work with.
-                            self.type = "episode"
+                            self.media_type = "episode"
                             data["type"] = "episode"
                             # You'd think we could just use the episode key that Trakt just returned to us, but the scrobbler
                             # function (see scrobber.py) only understands the show key plus season/episode values.
@@ -853,7 +860,7 @@ class traktPlayer(xbmc.Player):
                             data["video_ids"] = showKeys
                             # Now to find the episode. There's no search function to look for an episode within a show, but
                             # we can get all the episodes and look for the title.
-                            while not data["season"]:
+                            if not data["season"]:
                                 logger.debug(
                                     "[traktPlayer] onAVStarted() - Querying for all seasons/episodes of this show"
                                 )
@@ -867,7 +874,6 @@ class traktPlayer(xbmc.Player):
                                     logger.debug(
                                         "[traktPlayer] onAVStarted() - No response received"
                                     )
-                                    break
                                 else:
                                     # Got the list back. Go through each season.
                                     logger.debug(
@@ -887,7 +893,7 @@ class traktPlayer(xbmc.Player):
                                                 thisEpTitle = eachSeason.episodes[
                                                     eachEpisodeNumber
                                                 ].title
-                                            except:  # noqa: E722
+                                            except Exception:
                                                 thisEpTitle = None
                                             logger.debug(
                                                 "[traktPlayer] onAVStarted() - Checking episode number %d with title %s"
@@ -924,7 +930,7 @@ class traktPlayer(xbmc.Player):
                 else:
                     logger.debug(
                         "[traktPlayer] onAVStarted() - Video type '%s' unrecognized, skipping."
-                        % self.type
+                        % self.media_type
                     )
                     return
 
