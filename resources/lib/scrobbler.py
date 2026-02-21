@@ -508,7 +508,7 @@ class Scrobbler:
         if not self.curVideoInfo:
             return
 
-        logger.debug("scrobble()")
+        logger.info("Scrobble '%s'" % status)
         scrobbleMovieOption = kodiUtilities.getSettingAsBool("scrobble_movie")
         scrobbleEpisodeOption = kodiUtilities.getSettingAsBool("scrobble_episode")
 

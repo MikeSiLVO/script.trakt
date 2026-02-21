@@ -476,6 +476,7 @@ class traktPlayer(xbmc.Player):
 
     # called when kodi starts playing a file
     def onAVStarted(self):
+        logger.info("[traktPlayer] Playback started")
         xbmc.sleep(1000)
         self.media_type = None
         self.media_id = None

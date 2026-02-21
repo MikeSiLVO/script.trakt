@@ -36,7 +36,7 @@ class traktAPI:
     __client_secret = [32, 119, 36, 33, 38, 117, 33, 32, 119, 38, 123, 32, 32, 123, 116, 113, 117, 122, 118, 38, 115, 115, 32, 32, 36, 122, 119, 113, 119, 32, 33, 114, 38, 112, 119, 38, 118, 116, 112, 112, 119, 114, 115, 116, 115, 123, 115, 39, 32, 118, 122, 39, 119, 114, 117, 123, 112, 38, 112, 115, 119, 119, 33, 114]
 
     def __init__(self, force=False):
-        logger.debug("Initializing.")
+        logger.info("Initializing.")
 
         proxyURL = checkAndConfigureProxy()
         if proxyURL:

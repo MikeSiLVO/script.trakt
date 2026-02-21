@@ -51,10 +51,10 @@ class Sync():
         return not self.show_progress and self.sync_on_update and self.notify and (self.notify_during_playback or not xbmc.Player().isPlayingVideo())
 
     def sync(self):
-        logger.debug("Starting synchronization with Trakt.tv")
+        logger.info("Starting synchronization with Trakt.tv")
 
         if not self.manual and self.__canSkipSync():
-            logger.debug("[Sync] No changes on Trakt or Kodi since last sync, skipping.")
+            logger.info("[Sync] No changes on Trakt or Kodi since last sync, skipping.")
             return
 
         if self.__syncCheck('movies'):
@@ -80,7 +80,7 @@ class Sync():
             logger.debug("Episode sync is disabled, skipping.")
 
         self.__saveLastActivities()
-        logger.debug("[Sync] Finished synchronization with Trakt.tv")
+        logger.info("[Sync] Finished synchronization with Trakt.tv")
 
     def __canSkipSync(self):
         """Check if sync can be skipped because nothing changed on either side."""

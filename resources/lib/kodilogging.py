@@ -40,7 +40,8 @@ class KodiLogHandler(logging.StreamHandler):
             logging.DEBUG: xbmc.LOGDEBUG,
             logging.NOTSET: xbmc.LOGNONE,
         }
-        if getSettingAsBool('debug'):
+        # INFO+ always logged; DEBUG only when addon debug setting is enabled
+        if record.levelno >= logging.INFO or getSettingAsBool('debug'):
             xbmc.log(self.format(record), levels[record.levelno])
 
     def flush(self):
