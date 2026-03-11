@@ -20,7 +20,7 @@
 				<posx>0</posx>
 				<posy>0</posy>
 				<width>340</width>
-				<height>217</height>
+				<height>270</height>
 				<texture>trakt-context-bg.png</texture>
 			</control>
 			<control type="list" id="111">

@@ -10,13 +10,14 @@ logger = logging.getLogger(__name__)
 
 
 class Sync():
-    def __init__(self, show_progress: bool = False, run_silent: bool = False, library: str = "all", api: Any = None, manual: bool = False) -> None:
+    def __init__(self, show_progress: bool = False, run_silent: bool = False, library: str = "all", api: Any = None, manual: bool = False, force_rewatch: bool = False) -> None:
         self.traktapi = api
         self.progress = xbmcgui.DialogProgress()
         self.show_progress = show_progress
         self.run_silent = run_silent
         self.library = library
         self.manual = manual
+        self.force_rewatch = force_rewatch
         if self.show_progress and self.run_silent:
             logger.debug("Sync is being run silently.")
         self.sync_on_update = getSettingAsBool('sync_on_update')
@@ -128,11 +129,14 @@ class Sync():
         setSetting("kodi_library_dirty", "false")
 
     def IsCanceled(self) -> bool:
-        if self.show_progress and not self.run_silent and self.progress.iscanceled():
-            logger.debug("Sync was canceled by user.")
-            return True
-        else:
-            return False
+        if self.show_progress and not self.run_silent:
+            try:
+                if self.progress.iscanceled():
+                    logger.debug("Sync was canceled by user.")
+                    return True
+            except RuntimeError:
+                pass
+        return False
 
     def UpdateProgress(self, *args: Any, **kwargs: Any) -> None:
         if self.show_progress and not self.run_silent:

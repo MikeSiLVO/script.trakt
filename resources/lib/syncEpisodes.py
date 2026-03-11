@@ -572,6 +572,11 @@ class SyncEpisodes:
                 collected=kodiShowsCollected,
             )
 
+            if kodiUtilities.getSettingAsBool("rewatch_aware_sync") or self.sync.force_rewatch:
+                kodiShowsUpdate = utilities.filterRewatchEpisodes(
+                    kodiShowsUpdate, traktShows
+                )
+
             if len(kodiShowsUpdate["shows"]) == 0:
                 self.sync.UpdateProgress(
                     toPercent,

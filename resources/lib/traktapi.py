@@ -33,8 +33,8 @@ logger = logging.getLogger(__name__)
 
 class traktAPI:
     # Placeholders for build-time injection
-    __client_id: List[int] = [38, 118, 115, 116, 115, 35, 117, 35, 115, 114, 116, 118, 112, 118, 119, 119, 115, 35, 38, 38, 115, 117, 115, 39, 119, 118, 117, 114, 115, 115, 112, 39, 118, 35, 36, 38, 35, 36, 112, 118, 113, 122, 39, 116, 39, 36, 112, 36, 39, 114, 119, 118, 122, 39, 38, 33, 117, 119, 123, 112, 118, 122, 116, 122]
-    __client_secret: List[int] = [32, 119, 36, 33, 38, 117, 33, 32, 119, 38, 123, 32, 32, 123, 116, 113, 117, 122, 118, 38, 115, 115, 32, 32, 36, 122, 119, 113, 119, 32, 33, 114, 38, 112, 119, 38, 118, 116, 112, 112, 119, 114, 115, 116, 115, 123, 115, 39, 32, 118, 122, 39, 119, 114, 117, 123, 112, 38, 112, 115, 119, 119, 33, 114]
+    __client_id: List[int] = [123, 39, 116, 119, 33, 117, 32, 32, 118, 35, 119, 32, 117, 122, 116, 35, 119, 32, 119, 38, 36, 113, 39, 117, 113, 117, 115, 33, 113, 32, 33, 38, 36, 35, 114, 114, 39, 112, 116, 35, 118, 123, 114, 117, 122, 39, 35, 112, 114, 112, 122, 122, 38, 116, 115, 116, 36, 39, 122, 113, 38, 122, 118, 38]
+    __client_secret: List[int] = [35, 32, 33, 116, 36, 33, 123, 119, 119, 118, 114, 118, 123, 123, 38, 114, 113, 114, 122, 39, 119, 117, 32, 33, 112, 117, 39, 33, 35, 36, 123, 35, 38, 39, 33, 117, 36, 123, 38, 118, 114, 35, 122, 123, 112, 116, 36, 113, 117, 123, 118, 115, 36, 36, 119, 117, 123, 123, 32, 35, 119, 35, 32, 113]
     authorization: Optional[Dict] = None
     authDialog: Optional[deviceAuthDialog.DeviceAuthDialog] = None
 
@@ -366,6 +366,11 @@ class traktAPI:
     def getMovieSummary(self, movieId: str, extended: Optional[str] = None) -> "Movie":
         with Trakt.configuration.http(retry=True):
             return Trakt["movies"].get(movieId, extended=extended)
+
+    def getShowWatchedProgress(self, showId: str) -> Any:
+        with Trakt.configuration.oauth.from_response(self.authorization):
+            with Trakt.configuration.http(retry=True, timeout=90):
+                return Trakt["shows"].progress_watched(showId)
 
     def getShowSummary(self, showId: str) -> "Show":
         with Trakt.configuration.http(retry=True):

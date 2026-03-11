@@ -1,18 +1,25 @@
 import xbmc
 import time
 import logging
+from datetime import datetime, timezone
 from typing import Dict, List, Optional, Any
 from resources.lib import utilities
 from resources.lib import kodiUtilities
 import math
 from resources.lib.rating import ratingCheck
+from resources.lib.scrobble_queue import ScrobbleQueue
 
 logger = logging.getLogger(__name__)
 
 
 class Scrobbler:
-    def __init__(self, api: Any) -> None:
-        self.traktapi = api
+    @property
+    def traktapi(self):
+        from resources.lib import globals
+        return globals.traktapi
+
+    def __init__(self) -> None:
+        self.scrobble_queue = ScrobbleQueue()
         self.isPlaying = False
         self.isPaused = False
         self.stopScrobbler = False
@@ -552,6 +559,13 @@ class Scrobbler:
                     "Failed to scrobble movie: %s | %s | %s"
                     % (self.curVideoInfo, watchedPercent, status)
                 )
+                # Only queue if watched enough to count (Trakt's threshold is 80%)
+                if status == "stop" and watchedPercent >= 80:
+                    self.scrobble_queue.add(
+                        "movie", self.curVideoInfo, None,
+                        watchedPercent,
+                        datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+                    )
 
         elif utilities.isEpisode(self.curVideo["type"]) and scrobbleEpisodeOption:
             if self.isMultiPartEpisode:
@@ -639,6 +653,12 @@ class Scrobbler:
                     "Failed to scrobble episode: %s | %s | %s | %s"
                     % (self.traktShowSummary, self.curVideoInfo, watchedPercent, status)
                 )
+                if status == "stop" and watchedPercent >= 80:
+                    self.scrobble_queue.add(
+                        "episode", self.curVideoInfo, self.traktShowSummary,
+                        watchedPercent,
+                        datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+                    )
 
     def __clearPlaybackProgress(self, response: Dict) -> None:
         """If setting enabled and stop resulted in a pause (not a scrobble),

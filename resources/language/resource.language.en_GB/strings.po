@@ -569,7 +569,7 @@ msgid "Rate this episode"
 msgstr ""
 
 msgctxt "#32140"
-msgid "Toggle watched"
+msgid "Sync watched from Trakt"
 msgstr ""
 
 msgctxt "#32141"
@@ -776,6 +776,22 @@ msgstr ""
 
 msgctxt "#32192"
 msgid "Don't save playback progress"
+msgstr ""
+
+msgctxt "#32193"
+msgid "Respect Trakt rewatch progress"
+msgstr ""
+
+msgctxt "#42193"
+msgid "When enabled, shows marked as rewatching on Trakt will only have episodes marked watched up to your current rewatch progress. Requires Trakt VIP for the rewatch feature."
+msgstr ""
+
+msgctxt "#32194"
+msgid "Sync rewatch progress"
+msgstr ""
+
+msgctxt "#32195"
+msgid "%i episode(s) filtered by rewatch progress"
 msgstr ""
 
 msgctxt "#42191"

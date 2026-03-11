@@ -631,6 +631,71 @@ def compareEpisodes(
     return result
 
 
+def filterRewatchEpisodes(shows_to_update: Dict, trakt_shows: Dict) -> Dict:
+    """Filter out episodes that were watched before a show's rewatch reset point.
+
+    For shows where the user has started a rewatch on Trakt (reset_at is set),
+    only keep episodes whose last_watched_at is on or after reset_at.
+    """
+    # Build lookup: any show ID -> reset_at
+    reset_lookup = {}
+    for show in trakt_shows.get("shows", []):
+        reset_at = show.get("reset_at")
+        if not reset_at:
+            continue
+        if show.get("ids"):
+            for id_type, id_val in show["ids"].items():
+                if id_val:
+                    reset_lookup[(id_type, str(id_val))] = reset_at
+
+    if not reset_lookup:
+        return shows_to_update
+
+    filtered_shows = []
+    for show in shows_to_update["shows"]:
+        # Find reset_at for this show
+        reset_at = None
+        if show.get("ids"):
+            for id_type, id_val in show["ids"].items():
+                if id_val:
+                    reset_at = reset_lookup.get((id_type, str(id_val)))
+                    if reset_at:
+                        break
+
+        if not reset_at:
+            filtered_shows.append(show)
+            continue
+
+        # Filter episodes: only keep those watched during/after the rewatch
+        filtered_seasons = []
+        show_filtered = 0
+        for season in show["seasons"]:
+            filtered_episodes = []
+            for episode in season["episodes"]:
+                ep_watched = episode.get("last_watched_at")
+                if ep_watched and ep_watched >= reset_at:
+                    filtered_episodes.append(episode)
+                else:
+                    show_filtered += 1
+            if filtered_episodes:
+                filtered_seasons.append(
+                    {"number": season["number"], "episodes": filtered_episodes}
+                )
+
+        if filtered_seasons:
+            show_copy = dict(show)
+            show_copy["seasons"] = filtered_seasons
+            filtered_shows.append(show_copy)
+
+        if show_filtered > 0:
+            logger.info(
+                "[Rewatch] Filtered %s: %i episode(s) predate reset_at %s"
+                % (show.get("title", "?"), show_filtered, reset_at)
+            )
+
+    return {"shows": filtered_shows}
+
+
 def countEpisodes(shows: Union[Dict, List], collection: bool = True) -> int:
     count = 0
     if "shows" in shows:
