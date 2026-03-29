@@ -1,6 +1,3 @@
-# -*- coding: utf-8 -*-
-#
-
 import xbmc
 import xbmcgui
 import xbmcaddon
@@ -65,13 +62,11 @@ def kodiJsonRequest(params: Dict) -> Optional[Union[Dict, List]]:
 
     response = json.loads(request)
 
-    try:
-        if "result" in response:
-            return response["result"]
-        return None
-    except KeyError:
-        logger.warn("[%s] %s" % (params["method"], response["error"]["message"]))
-        return None
+    if isinstance(response, list):
+        return response
+    if "result" in response:
+        return response["result"]
+    return None
 
 
 # check exclusion settings for filename passed as argument
@@ -120,25 +115,25 @@ def checkExclusion(fullpath: str) -> bool:
             )
             return True
 
-    found = False
     for x in range(2, 13):
-        found |= utilities.checkExcludePath(
+        if utilities.checkExcludePath(
             getSetting("ExcludePath%i" % x),
             getSettingAsBool("ExcludePathOption%i" % x),
             fullpath,
             x,
-        )
+        ):
+            return True
 
-    return found
+    return False
 
 
-def kodiRpcToTraktMediaObject(type: str, data: Dict, mode: str = "collected") -> Optional[Dict]:
-    if type == "show":
+def kodiRpcToTraktMediaObject(media_type: str, data: Dict, mode: str = "collected") -> Optional[Dict]:
+    if media_type == "show":
         if "uniqueid" in data:
             data["ids"] = data.pop("uniqueid")
         elif "imdbnumber" in data:
-            id = data.pop("imdbnumber")
-            data["ids"] = utilities.guessBestTraktId(id, type)[0]
+            imdbnumber = data.pop("imdbnumber")
+            data["ids"] = utilities.guessBestTraktId(imdbnumber, media_type)[0]
         else:
             logger.debug("kodiRpcToTraktMediaObject(): No uniqueid found")
         data["rating"] = (
@@ -146,7 +141,7 @@ def kodiRpcToTraktMediaObject(type: str, data: Dict, mode: str = "collected") ->
         )
         del data["label"]
         return data
-    elif type == "episode":
+    elif media_type == "episode":
         if checkExclusion(data["file"]):
             return
 
@@ -179,11 +174,11 @@ def kodiRpcToTraktMediaObject(type: str, data: Dict, mode: str = "collected") ->
                 episode["ids"]["tvdb"] = data["uniqueid"]["tvdb"]
             elif "unknown" in data["uniqueid"] and data["uniqueid"]["unknown"] != "":
                 episode["ids"].update(
-                    utilities.guessBestTraktId(data["uniqueid"]["unknown"], type)[0]
+                    utilities.guessBestTraktId(data["uniqueid"]["unknown"], media_type)[0]
                 )
         elif "imdbnumber" in data:
-            id = data.pop("imdbnumber")
-            data["ids"] = utilities.guessBestTraktId(id, type)[0]
+            imdbnumber = data.pop("imdbnumber")
+            data["ids"] = utilities.guessBestTraktId(imdbnumber, media_type)[0]
 
         if "lastplayed" in data:
             episode["watched_at"] = utilities.convertDateTimeToUTC(data["lastplayed"])
@@ -201,7 +196,7 @@ def kodiRpcToTraktMediaObject(type: str, data: Dict, mode: str = "collected") ->
         else:
             return
 
-    elif type == "movie":
+    elif media_type == "movie":
         if checkExclusion(data.pop("file")):
             return
         if "lastplayed" in data:
@@ -220,14 +215,14 @@ def kodiRpcToTraktMediaObject(type: str, data: Dict, mode: str = "collected") ->
         if "uniqueid" in data:
             data["ids"] = data.pop("uniqueid")
         elif "imdbnumber" in data:
-            id = data.pop("imdbnumber")
-            data["ids"] = utilities.guessBestTraktId(id, type)[0]
+            imdbnumber = data.pop("imdbnumber")
+            data["ids"] = utilities.guessBestTraktId(imdbnumber, media_type)[0]
         else:
             logger.debug("kodiRpcToTraktMediaObject(): No uniqueid found")
         del data["label"]
         return data
     else:
-        logger.debug("kodiRpcToTraktMediaObject() No valid type")
+        logger.debug("kodiRpcToTraktMediaObject() No valid media_type")
         return
 
 
@@ -478,8 +473,6 @@ def checkAndConfigureProxy() -> Optional[str]:
     else:
         return None
 
-    return None
-
 
 def getMediaType() -> Optional[str]:
     listType = xbmc.getInfoLabel("ListItem.DBTYPE")
@@ -499,10 +492,10 @@ def getMediaType() -> Optional[str]:
 
 
 def getInfoLabelDetails(result: Dict) -> Tuple[str, Dict]:
-    type = result["item"]["type"]
+    media_type = result["item"]["type"]
     data = {"action": "started"}
     # check type of item
-    if "id" not in result["item"] or type == "channel":
+    if "id" not in result["item"] or media_type == "channel":
         # do a deeper check to see if we have enough data to perform scrobbles
         logger.debug(
             "getInfoLabelDetails - Started playing a non-library file, checking available data."
@@ -526,7 +519,7 @@ def getInfoLabelDetails(result: Dict) -> Tuple[str, Dict]:
 
         if season >= 0 and episode > 0 and (showtitle or video_ids):
             # we have season, episode and either a show title or video_ids, can scrobble this as an episode
-            type = "episode"
+            media_type = "episode"
             data["type"] = "episode"
             data["season"] = season
             data["episode"] = episode
@@ -540,7 +533,7 @@ def getInfoLabelDetails(result: Dict) -> Tuple[str, Dict]:
             )
         elif (year or video_ids) and season < 0 and not title:
             # we have a year or video_id and no season/showtitle info, enough for a movie
-            type = "movie"
+            media_type = "movie"
             data["type"] = "movie"
             if year.isdigit():
                 data["year"] = int(year)
@@ -566,4 +559,4 @@ def getInfoLabelDetails(result: Dict) -> Tuple[str, Dict]:
                 "getInfoLabelDetails - Non-library file, not enough data for scrobbling, skipping."
             )
             return {}, {}
-    return type, data
+    return media_type, data

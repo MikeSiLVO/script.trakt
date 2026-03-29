@@ -122,6 +122,33 @@
 					<level>3</level>
 					<visible>false</visible>
 				</setting>
+				<setting id="last_activities_all" type="string" label="last_activities_all">
+					<constraints>
+						<allowempty>true</allowempty>
+					</constraints>
+					<control type="edit" format="string" />
+					<default />
+					<enable>false</enable>
+					<level>4</level>
+					<visible>false</visible>
+				</setting>
+				<setting id="settings_migrated_v2" type="boolean" label="settings_migrated_v2">
+					<control type="toggle" />
+					<default>false</default>
+					<enable>false</enable>
+					<level>4</level>
+					<visible>false</visible>
+				</setting>
+				<setting id="kodi_library_dirty" type="string" label="kodi_library_dirty">
+					<constraints>
+						<allowempty>true</allowempty>
+					</constraints>
+					<control type="edit" format="string" />
+					<default>false</default>
+					<enable>false</enable>
+					<level>4</level>
+					<visible>false</visible>
+				</setting>
 			</group>
 		</category>
 		<category id="exclusions" label="32016" help="">
@@ -507,6 +534,11 @@
 					<default>false</default>
 					<level>1</level>
 				</setting>
+				<setting id="clear_playback_progress" type="boolean" label="32192" help="">
+					<control type="toggle" />
+					<default>false</default>
+					<level>1</level>
+				</setting>
 			</group>
 		</category>
 		<category id="synchronize" label="32045" help="">
@@ -526,26 +558,31 @@
 					<default>false</default>
 					<level>1</level>
 				</setting>
-				<setting id="trakt_sync_ratings" type="boolean" label="32168" help="">
+				<setting id="sync_ratings_to_kodi" type="boolean" label="32196" help="">
 					<control type="toggle" />
 					<default>true</default>
 					<level>1</level>
 				</setting>
-			</group>
-			<group id="2" label="32046">
-				<setting id="add_movies_to_trakt" type="boolean" label="32047" help="">
-					<control type="toggle" />
-					<default>true</default>
-					<level>1</level>
-				</setting>
-				<setting id="clean_trakt_movies" type="boolean" label="32057" help="">
+				<setting id="sync_ratings_to_trakt" type="boolean" label="32197" help="">
 					<control type="toggle" />
 					<default>false</default>
 					<level>1</level>
 				</setting>
-				<setting id="trakt_movie_playcount" type="boolean" label="32048" help="">
+			</group>
+			<group id="2" label="32046">
+				<setting id="sync_collection_movies_to_trakt" type="boolean" label="32047" help="">
 					<control type="toggle" />
-					<default>true</default>
+					<default>false</default>
+					<level>1</level>
+				</setting>
+				<setting id="sync_clean_collection_movies_to_trakt" type="boolean" label="32057" help="">
+					<control type="toggle" />
+					<default>false</default>
+					<level>1</level>
+				</setting>
+				<setting id="sync_playcount_movies_to_trakt" type="boolean" label="32048" help="">
+					<control type="toggle" />
+					<default>false</default>
 					<level>1</level>
 				</setting>
 				<setting id="kodi_movie_playcount" type="boolean" label="32049" help="">
@@ -560,24 +597,32 @@
 				</setting>
 			</group>
 			<group id="3" label="32050">
-				<setting id="add_episodes_to_trakt" type="boolean" label="32051" help="">
-					<control type="toggle" />
-					<default>true</default>
-					<level>1</level>
-				</setting>
-				<setting id="clean_trakt_episodes" type="boolean" label="32058" help="">
+				<setting id="sync_collection_episodes_to_trakt" type="boolean" label="32051" help="">
 					<control type="toggle" />
 					<default>false</default>
 					<level>1</level>
 				</setting>
-				<setting id="trakt_episode_playcount" type="boolean" label="32052" help="">
+				<setting id="sync_clean_collection_episodes_to_trakt" type="boolean" label="32058" help="">
 					<control type="toggle" />
-					<default>true</default>
+					<default>false</default>
+					<level>1</level>
+				</setting>
+				<setting id="sync_playcount_episodes_to_trakt" type="boolean" label="32052" help="">
+					<control type="toggle" />
+					<default>false</default>
 					<level>1</level>
 				</setting>
 				<setting id="kodi_episode_playcount" type="boolean" label="32053" help="">
 					<control type="toggle" />
 					<default>true</default>
+					<level>1</level>
+				</setting>
+				<setting id="rewatch_aware_sync" type="boolean" label="32193" help="42193" parent="kodi_episode_playcount">
+					<control type="toggle" />
+					<default>false</default>
+					<dependencies>
+						<dependency type="enable" setting="kodi_episode_playcount">true</dependency>
+					</dependencies>
 					<level>1</level>
 				</setting>
 				<setting id="trakt_episode_playback" type="boolean" label="32118" help="">

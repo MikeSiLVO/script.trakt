@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 import logging
 import os
 import time
@@ -33,21 +31,21 @@ __addonversion__ = __addon__.getAddonInfo("version")
 logger = logging.getLogger(__name__)
 
 
-class traktAPI(object):
+class traktAPI:
     # Placeholders for build-time injection
-    __client_id: str = "TRAKT_CLIENT_ID_PLACEHOLDER"
-    __client_secret: str = "TRAKT_CLIENT_SECRET_PLACEHOLDER"
+    __client_id: List[int] = [123, 39, 116, 119, 33, 117, 32, 32, 118, 35, 119, 32, 117, 122, 116, 35, 119, 32, 119, 38, 36, 113, 39, 117, 113, 117, 115, 33, 113, 32, 33, 38, 36, 35, 114, 114, 39, 112, 116, 35, 118, 123, 114, 117, 122, 39, 35, 112, 114, 112, 122, 122, 38, 116, 115, 116, 36, 39, 122, 113, 38, 122, 118, 38]
+    __client_secret: List[int] = [35, 32, 33, 116, 36, 33, 123, 119, 119, 118, 114, 118, 123, 123, 38, 114, 113, 114, 122, 39, 119, 117, 32, 33, 112, 117, 39, 33, 35, 36, 123, 35, 38, 39, 33, 117, 36, 123, 38, 118, 114, 35, 122, 123, 112, 116, 36, 113, 117, 123, 118, 115, 36, 36, 119, 117, 123, 123, 32, 35, 119, 35, 32, 113]
     authorization: Optional[Dict] = None
     authDialog: Optional[deviceAuthDialog.DeviceAuthDialog] = None
 
     def __init__(self, force: bool = False) -> None:
-        logger.debug("Initializing.")
+        logger.info("Initializing.")
 
         proxyURL = checkAndConfigureProxy()
         if proxyURL:
             Trakt.http.proxies = {"http": proxyURL, "https": proxyURL}
 
-        # Configure
+        # Configure — env vars take priority, fall back to obfuscated build-time keys
         client_id = os.environ.get("TRAKT_CLIENT_ID")
         client_secret = os.environ.get("TRAKT_CLIENT_SECRET")
 
@@ -56,15 +54,13 @@ class traktAPI(object):
             client_secret = deobfuscate(self.__client_secret)
 
         Trakt.configuration.defaults.client(
-            id=client_id,
-            secret=client_secret,
+            id=client_id, secret=client_secret
         )
 
-        user_agent = "Kodi script.trakt/%s" % __addonversion__
-        if getattr(Trakt.http, "headers", None) is None:
-            Trakt.http.headers = {"User-Agent": user_agent}
-        else:
-            Trakt.http.headers["User-Agent"] = user_agent
+        Trakt.configuration.defaults.app(
+            name="script.trakt",
+            version=__addonversion__
+        )
 
         # Bind event
         Trakt.on("oauth.token_refreshed", self.on_token_refreshed)
@@ -132,7 +128,7 @@ class traktAPI(object):
         """
         self.authorization = token
         setSetting("authorization", dumps(self.authorization))
-        logger.debug("Authentication complete: %r" % token)
+        logger.debug("Authentication complete: token received")
         if self.authDialog:
             self.authDialog.close()
         notification(getString(32157), getString(32152), 3000)
@@ -261,9 +257,35 @@ class traktAPI(object):
 
     def addToHistory(self, mediaObject: Dict) -> Optional[Dict]:
         with Trakt.configuration.oauth.from_response(self.authorization):
-            # don't try this call it may cause multiple watches
-            result = Trakt["sync/history"].add(mediaObject)
+            with Trakt.configuration.http(retry=True):
+                result = Trakt["sync/history"].add(mediaObject)
         return result
+
+    def deletePlaybackProgress(self, playbackId: Any) -> Any:
+        with Trakt.configuration.oauth.from_response(self.authorization):
+            with Trakt.configuration.http(retry=True):
+                return Trakt["sync/playback"].delete(playbackId)
+
+    def removePlaybackProgressForItem(self, mediaType: str, traktId: Any) -> Any:
+        """Find and delete the playback progress entry matching traktId."""
+        try:
+            if mediaType == "movie":
+                items = self.getMoviePlaybackProgress()
+                for item in items:
+                    if item.get_key("trakt") == traktId:
+                        logger.debug("Removing playback progress for movie trakt:%s (playback id: %s)" % (traktId, item.id))
+                        return self.deletePlaybackProgress(item.id)
+            elif mediaType == "episode":
+                shows = self.getEpisodePlaybackProgress()
+                for show in shows:
+                    for _, season in show.seasons.items():
+                        for _, episode in season.episodes.items():
+                            if episode.get_key("trakt") == traktId:
+                                logger.debug("Removing playback progress for episode trakt:%s (playback id: %s)" % (traktId, episode.id))
+                                return self.deletePlaybackProgress(episode.id)
+        except Exception as ex:
+            logger.debug("Failed to remove playback progress: %s" % str(ex))
+        return False
 
     def addToWatchlist(self, mediaObject: Dict) -> Optional[Dict]:
         with Trakt.configuration.oauth.from_response(self.authorization):
@@ -321,7 +343,7 @@ class traktAPI(object):
             with Trakt.configuration.http(retry=True):
                 playback = Trakt["sync/playback"].movies(exceptions=True)
 
-                for _, item in list(playback.items()):
+                for _, item in playback.items():
                     if type(item) is Movie:
                         progressMovies.append(item)
 
@@ -335,7 +357,7 @@ class traktAPI(object):
             with Trakt.configuration.http(retry=True):
                 playback = Trakt["sync/playback"].episodes(exceptions=True)
 
-                for _, item in list(playback.items()):
+                for _, item in playback.items():
                     if type(item) is Show:
                         progressEpisodes.append(item)
 
@@ -344,6 +366,11 @@ class traktAPI(object):
     def getMovieSummary(self, movieId: str, extended: Optional[str] = None) -> "Movie":
         with Trakt.configuration.http(retry=True):
             return Trakt["movies"].get(movieId, extended=extended)
+
+    def getShowWatchedProgress(self, showId: str) -> Any:
+        with Trakt.configuration.oauth.from_response(self.authorization):
+            with Trakt.configuration.http(retry=True, timeout=90):
+                return Trakt["shows"].progress_watched(showId)
 
     def getShowSummary(self, showId: str) -> "Show":
         with Trakt.configuration.http(retry=True):
@@ -370,6 +397,11 @@ class traktAPI(object):
             if result and not isinstance(result, list):
                 result = [result]
             return result
+
+    def getLastActivities(self) -> Optional[Dict]:
+        with Trakt.configuration.oauth.from_response(self.authorization):
+            with Trakt.configuration.http(retry=True):
+                return Trakt["sync"].last_activities()
 
     def getUser(self) -> Optional[Dict]:
         with Trakt.configuration.oauth.from_response(self.authorization):

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 import xbmc
 import sys
 import logging
@@ -45,6 +44,9 @@ def run() -> None:
             buttons.append("togglewatched")
             buttons.append("addtowatchlist")
 
+        if media_type in ['show']:
+            buttons.append("syncrewatch")
+
         buttons.append("sync")
 
         contextMenu = traktContextMenu(media_type=media_type, buttons=buttons)
@@ -58,7 +60,24 @@ def run() -> None:
         logger.debug("'%s' selected from trakt.tv action menu" % _action)
         args['action'] = _action
 
-    if args['action'] == 'sync':
+    if args['action'] == 'syncrewatch':
+        media_type = kodiUtilities.getMediaType()
+        if utilities.isShow(media_type):
+            dbid = int(xbmc.getInfoLabel('ListItem.DBID'))
+            result = kodiUtilities.getShowDetailsFromKodi(
+                dbid, ['imdbnumber', 'uniqueid'])
+            if not result:
+                logger.debug("Error getting show details from Kodi.")
+            else:
+                data = {
+                    'action': 'syncWatchedFromTrakt',
+                    'tvshowid': dbid,
+                    'ids': result['uniqueid'],
+                    'title': result['label'],
+                    'rewatch': True,
+                }
+
+    elif args['action'] == 'sync':
         data = {'action': 'manualSync', 'silent': False}
         if 'silent' in args:
             data['silent'] = (args['silent'].lower() == 'true')
@@ -174,122 +193,38 @@ def run() -> None:
 
     elif args['action'] == 'togglewatched':
         media_type = kodiUtilities.getMediaType()
-        if media_type in ['movie', 'show', 'season', 'episode']:
-            data = {'media_type': media_type}
-            if utilities.isMovie(media_type):
-                dbid = int(xbmc.getInfoLabel('ListItem.DBID'))
-                result = kodiUtilities.getMovieDetailsFromKodi(
-                    dbid, ['imdbnumber', 'uniqueid', 'title', 'year', 'playcount'])
-                if result:
-                    if result['playcount'] == 0:
-                        data['ids'] = result['uniqueid']
-                    else:
-                        logger.debug("Movie alread marked as watched in Kodi.")
-                else:
-                    logger.debug("Error getting movie details from Kodi.")
-                    return
+        if media_type in ['show', 'season', 'episode']:
+            dbid = int(xbmc.getInfoLabel('ListItem.DBID'))
 
-            elif utilities.isEpisode(media_type):
-                dbid = int(xbmc.getInfoLabel('ListItem.DBID'))
+            if utilities.isEpisode(media_type):
                 result = kodiUtilities.getEpisodeDetailsFromKodi(
-                    dbid, ['showtitle', 'season', 'episode', 'tvshowid', 'playcount'])
-                if result:
-                    if result['playcount'] == 0:
-                        data['ids'] = result['show_ids']
-                        data['season'] = result['season']
-                        data['number'] = result['episode']
-                        data['title'] = result['showtitle']
-                    else:
-                        logger.debug(
-                            "Episode already marked as watched in Kodi.")
-                else:
+                    dbid, ['tvshowid'])
+                if not result:
                     logger.debug("Error getting episode details from Kodi.")
                     return
-
+                tvshowid = result['tvshowid']
             elif utilities.isSeason(media_type):
-                showID = None
-                showTitle = xbmc.getInfoLabel('ListItem.TVShowTitle')
-                result = kodiUtilities.kodiJsonRequest({'jsonrpc': '2.0', 'method': 'VideoLibrary.GetTVShows', 'params': {
-                                                       'properties': ['title', 'imdbnumber', 'uniqueid', 'year']}, 'id': 0})
-                if result and 'tvshows' in result:
-                    for show in result['tvshows']:
-                        if show['title'] == showTitle:
-                            showID = show['tvshowid']
-                            data['ids'] = show['uniqueid']
-                            data['title'] = show['title']
-                            break
-                else:
-                    logger.debug("Error getting TV shows from Kodi.")
-                    return
-
-                season = xbmc.getInfoLabel('ListItem.Season')
-                if season == "":
-                    season = 0
-                else:
-                    season = int(season)
-
-                result = kodiUtilities.kodiJsonRequest({'jsonrpc': '2.0', 'method': 'VideoLibrary.GetEpisodes', 'params': {
-                                                       'tvshowid': showID, 'season': season, 'properties': ['season', 'episode', 'playcount']}, 'id': 0})
-                if result and 'episodes' in result:
-                    episodes = []
-                    for episode in result['episodes']:
-                        if episode['playcount'] == 0:
-                            episodes.append(episode['episode'])
-
-                    if len(episodes) == 0:
-                        logger.debug(
-                            "'%s - Season %d' is already marked as watched." % (showTitle, season))
-                        return
-
-                    data['season'] = season
-                    data['episodes'] = episodes
-                else:
-                    logger.debug(
-                        "Error getting episodes from '%s' for Season %d" % (showTitle, season))
-                    return
-
-            elif utilities.isShow(media_type):
-                dbid = int(xbmc.getInfoLabel('ListItem.DBID'))
-                result = kodiUtilities.getShowDetailsFromKodi(
-                    dbid, ['year', 'imdbnumber', 'uniqueid'])
+                result = kodiUtilities.getSeasonDetailsFromKodi(
+                    dbid, ['tvshowid'])
                 if not result:
-                    logger.debug("Error getting show details from Kodi.")
+                    logger.debug("Error getting season details from Kodi.")
                     return
-                showTitle = result['label']
-                data['ids'] = result['uniqueid']
-                result = kodiUtilities.kodiJsonRequest({'jsonrpc': '2.0', 'method': 'VideoLibrary.GetEpisodes', 'params': {
-                                                       'tvshowid': dbid, 'properties': ['season', 'episode', 'playcount', 'showtitle']}, 'id': 0})
-                if result and 'episodes' in result:
-                    i = 0
-                    s = {}
-                    for e in result['episodes']:
-                        data['title'] = e['showtitle']
-                        season = str(e['season'])
-                        if season not in s:
-                            s[season] = []
-                        if e['playcount'] == 0:
-                            s[season].append(e['episode'])
-                            i += 1
+                tvshowid = result['tvshowid']
+            else:
+                tvshowid = dbid
 
-                    if i == 0:
-                        logger.debug(
-                            "'%s' is already marked as watched." % showTitle)
-                        return
+            result = kodiUtilities.getShowDetailsFromKodi(
+                tvshowid, ['imdbnumber', 'uniqueid'])
+            if not result:
+                logger.debug("Error getting show details from Kodi.")
+                return
 
-                    data['seasons'] = dict((k, v)
-                                           for k, v in list(s.items()) if v)
-                else:
-                    logger.debug(
-                        "Error getting episode details for '%s' from Kodi." % showTitle)
-                    return
-
-            if len(data) > 1:
-                logger.debug("Marking '%s' with the following data '%s' as watched on Trakt.tv" % (
-                    media_type, str(data)))
-                data['action'] = 'markWatched'
-
-        # execute toggle watched action
-        xbmc.executebuiltin("Action(ToggleWatched)")
+            data = {
+                'action': 'syncWatchedFromTrakt',
+                'tvshowid': tvshowid,
+                'ids': result['uniqueid'],
+                'title': result['label'],
+            }
 
     elif args['action'] == 'addtowatchlist':
         media_type = kodiUtilities.getMediaType()
@@ -381,8 +316,7 @@ def run() -> None:
                         if e['playcount'] == 0:
                             s[season].append(e['episode'])
 
-                    data['seasons'] = dict((k, v)
-                                           for k, v in list(s.items()) if v)
+                    data['seasons'] = {k: v for k, v in s.items() if v}
                 else:
                     logger.debug(
                         "Error getting episode details for '%s' from Kodi." % showTitle)

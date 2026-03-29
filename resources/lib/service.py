@@ -1,9 +1,8 @@
-# -*- coding: utf-8 -*-
 import threading
 import logging
+import time
 from typing import Any, Dict, Optional, Callable
 import xbmc
-import time
 import xbmcgui
 import re
 import urllib.request
@@ -18,18 +17,17 @@ from resources.lib.rating import rateMedia
 from resources.lib.scrobbler import Scrobbler
 from resources.lib.sync import Sync
 from resources.lib.traktapi import traktAPI
+from trakt.core.helpers import to_iso8601_datetime
 
 logger = logging.getLogger(__name__)
 
 
 class traktService:
-    scrobbler: Optional[Scrobbler] = None
-    updateTagsThread: Optional[threading.Thread] = None
-    syncThread: Optional[threading.Thread] = None
-    dispatchQueue: sqlitequeue.SqliteQueue = sqlitequeue.SqliteQueue()
-
     def __init__(self) -> None:
-        threading.Thread.name = "trakt"
+        self.scrobbler = None
+        self.updateTagsThread = None
+        self.syncThread = None
+        self.dispatchQueue = sqlitequeue.SqliteQueue()
 
     def _dispatchQueue(self, data: Dict) -> None:
         logger.debug("Queuing for dispatch: %s" % data)
@@ -51,16 +49,20 @@ class traktService:
             elif action == "seek" or action == "seekchapter":
                 self.scrobbler.playbackSeek()
             elif action == "scanFinished":
+                kodiUtilities.setSetting("kodi_library_dirty", "true")
                 if kodiUtilities.getSettingAsBool("sync_on_update"):
                     logger.debug("Performing sync after library update.")
                     self.doSync()
             elif action == "databaseCleaned":
+                kodiUtilities.setSetting("kodi_library_dirty", "true")
                 if kodiUtilities.getSettingAsBool("sync_on_update") and (
-                    kodiUtilities.getSettingAsBool("clean_trakt_movies")
-                    or kodiUtilities.getSettingAsBool("clean_trakt_episodes")
+                    kodiUtilities.getSettingAsBool("sync_clean_collection_movies_to_trakt")
+                    or kodiUtilities.getSettingAsBool("sync_clean_collection_episodes_to_trakt")
                 ):
                     logger.debug("Performing sync after library clean.")
                     self.doSync()
+            elif action == "syncWatchedFromTrakt":
+                self.doSyncWatchedFromTrakt(data)
             elif action == "markWatched":
                 del data["action"]
                 self.doMarkWatched(data)
@@ -74,7 +76,10 @@ class traktService:
                 if not self.syncThread.is_alive():
                     logger.debug("Performing a manual sync.")
                     self.doSync(
-                        manual=True, silent=data["silent"], library=data["library"]
+                        manual=True,
+                        silent=data["silent"],
+                        library=data["library"],
+                        force_rewatch=data.get("force_rewatch", False),
                     )
                 else:
                     logger.debug("There already is a sync in progress.")
@@ -90,6 +95,67 @@ class traktService:
             message = utilities.createError(ex)
             logger.fatal(message)
 
+    def _retryFailedScrobbles(self) -> None:
+        queue = self.scrobbler.scrobble_queue
+        pending = queue.get_pending()
+        if not pending:
+            return
+
+        logger.info("[RetryScrobbles] %d pending scrobble(s) to retry" % len(pending))
+        for item in pending:
+            media_type = item["media_type"]
+            media_info = item["media_info"]
+            show_info = item["show_info"]
+            watched_at = item["watched_at"]
+
+            if media_type == "movie":
+                ids = media_info.get("ids", {})
+                payload = {
+                    "movies": [
+                        {
+                            "ids": ids,
+                            "title": media_info.get("title"),
+                            "year": media_info.get("year"),
+                            "watched_at": watched_at,
+                        }
+                    ]
+                }
+            elif media_type == "episode":
+                show_ids = show_info.get("ids", {}) if show_info else {}
+                payload = {
+                    "shows": [
+                        {
+                            "ids": show_ids,
+                            "title": show_info.get("title") if show_info else None,
+                            "year": show_info.get("year") if show_info else None,
+                            "seasons": [
+                                {
+                                    "number": media_info.get("season"),
+                                    "episodes": [
+                                        {
+                                            "number": media_info.get("number"),
+                                            "watched_at": watched_at,
+                                        }
+                                    ],
+                                }
+                            ],
+                        }
+                    ]
+                }
+            else:
+                queue.remove(item["id"])
+                continue
+
+            result = globals.traktapi.addToHistory(payload)
+            if result is not None:
+                logger.info("[RetryScrobbles] Successfully retried %s scrobble" % media_type)
+                queue.remove(item["id"])
+            else:
+                queue.increment_retry(item["id"])
+                logger.debug("[RetryScrobbles] Retry failed, will try again later")
+                # Trakt likely still down, stop burning through the queue
+                break
+
     def run(self) -> None:
         startup_delay = kodiUtilities.getSettingAsInt("startup_delay")
         if startup_delay:
@@ -98,8 +164,13 @@ class traktService:
 
         logger.debug("Service thread starting.")
 
-        # purge queue before doing anything
-        self.dispatchQueue.purge()
+        # Log and discard stale queue items from previous session
+        stale_count = len(self.dispatchQueue)
+        if stale_count > 0:
+            logger.debug("Discarding %d stale item(s) from dispatch queue." % stale_count)
+            for item in self.dispatchQueue:
+                logger.debug("Discarded queue item: %s" % item)
+            self.dispatchQueue.purge()
 
         # setup event driven classes
         self.Player = traktPlayer(action=self._dispatchQueue)
@@ -108,11 +179,25 @@ class traktService:
         # init traktapi class
         globals.traktapi = traktAPI()
 
+        # one-time migration notice for changed settings
+        if not kodiUtilities.getSettingAsBool("settings_migrated_v2"):
+            xbmcgui.Dialog().ok(
+                "Trakt - Settings Updated",
+                "Sync defaults have changed to protect your Trakt data.\n\n"
+                "All Kodi-to-Trakt sync options now default to OFF.\n"
+                "Ratings sync is now split into two settings:\n"
+                "  - Sync ratings from Trakt to Kodi (ON)\n"
+                "  - Sync ratings from Kodi to Trakt (OFF)\n\n"
+                "Please review your sync settings."
+            )
+            kodiUtilities.setSetting("settings_migrated_v2", "true")
+
         # init sync thread
         self.syncThread = syncThread()
 
         # init scrobbler class
-        self.scrobbler = Scrobbler(globals.traktapi)
+        self.scrobbler = Scrobbler()
+        self._last_retry_check = time.time()
 
         # start loop for events
         while not self.Monitor.abortRequested():
@@ -121,8 +206,12 @@ class traktService:
                 logger.debug("Queued dispatch: %s" % data)
                 self._dispatch(data)
 
-            if xbmc.Player().isPlayingVideo():
+            if self.Player.isPlayingVideo():
                 self.scrobbler.transitionCheck()
+
+            if time.time() - self._last_retry_check > 300:
+                self._last_retry_check = time.time()
+                self._retryFailedScrobbles()
 
             if self.Monitor.waitForAbort(1):
                 # Abort was requested while waiting. We should exit
@@ -364,7 +453,7 @@ class traktService:
             logger.debug(
                 "doMarkWatched(): '%s - Season %d' has %d episode(s) that are going to be marked as watched."
                 % (
-                    data["id"],
+                    data["ids"],
                     data["season"],
                     len(summaryInfo["shows"][0]["seasons"][0]["episodes"]),
                 )
@@ -400,8 +489,132 @@ class traktService:
             else:
                 kodiUtilities.notification(kodiUtilities.getString(32114), s)
 
-    def doSync(self, manual: bool = False, silent: bool = False, library: str = "all") -> None:
-        self.syncThread = syncThread(manual, silent, library)
+    def doSyncWatchedFromTrakt(self, data: Dict) -> None:
+        title = data.get("title", "?")
+        ids = data.get("ids", {})
+        tvshowid = data.get("tvshowid")
+        rewatch = data.get("rewatch", False)
+
+        # Find a Trakt-compatible ID
+        show_id = ids.get("imdb") or ids.get("tvdb") or ids.get("trakt") or ids.get("tmdb")
+        if not show_id:
+            logger.debug("[SyncWatched] No valid ID found for '%s'" % title)
+            kodiUtilities.notification(kodiUtilities.getString(32114), title)
+            return
+
+        logger.info("[SyncWatched] Fetching watched progress for '%s' (rewatch=%s)" % (title, rewatch))
+        progress = globals.traktapi.getShowWatchedProgress(show_id)
+        if not progress:
+            logger.debug("[SyncWatched] No progress data returned for '%s'" % title)
+            kodiUtilities.notification(kodiUtilities.getString(32114), title)
+            return
+
+        reset_at = to_iso8601_datetime(progress.reset_at) if progress.reset_at else None
+        logger.info("[SyncWatched] '%s': aired=%s, completed=%s, reset_at=%s"
+                    % (title, progress.aired, progress.completed, reset_at))
+
+        # Get all episodes from Kodi for this show
+        kodi_result = kodiUtilities.kodiJsonRequest({
+            "jsonrpc": "2.0",
+            "method": "VideoLibrary.GetEpisodes",
+            "params": {
+                "tvshowid": tvshowid,
+                "properties": ["season", "episode", "playcount"],
+            },
+            "id": 0,
+        })
+
+        if not kodi_result or "episodes" not in kodi_result:
+            logger.debug("[SyncWatched] No episodes found in Kodi for '%s'" % title)
+            return
+
+        # Build lookup directly from progress object: (season, episode) -> dict
+        trakt_episodes = {}
+        for season_num, season_progress in progress.seasons.items():
+            for ep_num, ep_progress in season_progress.episodes.items():
+                trakt_episodes[(season_num, ep_num)] = {
+                    "completed": ep_progress.completed,
+                    "last_watched_at": to_iso8601_datetime(ep_progress.progress_timestamp) if ep_progress.progress_timestamp else None,
+                }
+
+        logger.info("[SyncWatched] '%s': %i Trakt episodes, %i Kodi episodes"
+                    % (title, len(trakt_episodes), len(kodi_result["episodes"])))
+
+        # Build list of Kodi updates
+        mark_watched = []
+        mark_unwatched = []
+        for kodi_ep in kodi_result["episodes"]:
+            key = (kodi_ep["season"], kodi_ep["episode"])
+            trakt_ep = trakt_episodes.get(key)
+
+            if trakt_ep and trakt_ep.get("completed"):
+                ep_watched_at = trakt_ep.get("last_watched_at")
+
+                # Rewatch: treat episodes watched before reset as unwatched
+                if rewatch and reset_at and ep_watched_at:
+                    if ep_watched_at < reset_at:
+                        if kodi_ep["playcount"] > 0:
+                            mark_unwatched.append({
+                                "episodeid": kodi_ep["episodeid"],
+                                "playcount": 0,
+                            })
+                        continue
+
+                if kodi_ep["playcount"] == 0:
+                    update = {
+                        "episodeid": kodi_ep["episodeid"],
+                        "playcount": 1,
+                    }
+                    if ep_watched_at:
+                        update["lastplayed"] = utilities.convertUtcToDateTime(ep_watched_at)
+                    mark_watched.append(update)
+            else:
+                # Not completed on Trakt — unwatch in Kodi if rewatch mode
+                if rewatch and kodi_ep["playcount"] > 0:
+                    mark_unwatched.append({
+                        "episodeid": kodi_ep["episodeid"],
+                        "playcount": 0,
+                    })
+
+        updates = mark_watched + mark_unwatched
+        if not updates:
+            logger.info("[SyncWatched] '%s' is already up to date in Kodi." % title)
+            return
+
+        logger.info("[SyncWatched] '%s': marking %i watched, %i unwatched"
+                    % (title, len(mark_watched), len(mark_unwatched)))
+
+        progress_dialog = xbmcgui.DialogProgressBG()
+        progress_dialog.create("[SyncWatched]", title)
+
+        # Batch in chunks of 50, sleep between to let GUI message queue drain
+        chunk_size = 20
+        for i in range(0, len(updates), chunk_size):
+            chunk = updates[i:i + chunk_size]
+            percent = int(min((i + chunk_size), len(updates)) * 100 / len(updates))
+            progress_dialog.update(percent, "[SyncWatched]",
+                                   "%s (%i/%i)" % (title, min(i + chunk_size, len(updates)), len(updates)))
+            kodiUtilities.kodiJsonRequest([
+                {
+                    "jsonrpc": "2.0",
+                    "method": "VideoLibrary.SetEpisodeDetails",
+                    "params": update,
+                    "id": j,
+                }
+                for j, update in enumerate(chunk)
+            ])
+            if i + chunk_size < len(updates):
+                xbmc.sleep(250)
+
+        progress_dialog.close()
+
+        kodiUtilities.notification(
+            kodiUtilities.getString(32113),
+            "%s - %i watched, %i unwatched" % (title, len(mark_watched), len(mark_unwatched)),
+        )
+
+    def doSync(self, manual: bool = False, silent: bool = False, library: str = "all", force_rewatch: bool = False) -> None:
+        self.syncThread = syncThread(manual, silent, library, force_rewatch)
         self.syncThread.start()
 
 
@@ -410,12 +623,13 @@ class syncThread(threading.Thread):
     _runSilent: bool = False
     _library: str = "all"
 
-    def __init__(self, isManual: bool = False, runSilent: bool = False, library: str = "all") -> None:
+    def __init__(self, isManual: bool = False, runSilent: bool = False, library: str = "all", forceRewatch: bool = False) -> None:
         threading.Thread.__init__(self)
         self.name = "trakt-sync"
         self._isManual = isManual
         self._runSilent = runSilent
         self._library = library
+        self._forceRewatch = forceRewatch
 
     def run(self) -> None:
         sync = Sync(
@@ -423,6 +637,8 @@ class syncThread(threading.Thread):
             run_silent=self._runSilent,
             library=self._library,
             api=globals.traktapi,
+            manual=self._isManual,
+            force_rewatch=self._forceRewatch,
         )
         sync.sync()
 
@@ -481,9 +697,10 @@ class traktPlayer(xbmc.Player):
 
     # called when kodi starts playing a file
     def onAVStarted(self) -> None:
+        logger.info("[traktPlayer] Playback started")
         xbmc.sleep(1000)
-        self.type = None
-        self.id = None
+        self.media_type = None
+        self.media_id = None
 
         # take the user start scrobble offset into account
         scrobbleStartOffset = (
@@ -495,7 +712,7 @@ class traktPlayer(xbmc.Player):
             # check each 10 seconds if we can abort or proceed
             while scrobbleStartOffset > waitedFor:
                 waitedFor += waitFor
-                time.sleep(waitFor)
+                xbmc.sleep(waitFor * 1000)
                 if not self.isPlayingVideo():
                     logger.debug(
                         "[traktPlayer] Playback stopped before reaching the scrobble offset"
@@ -511,6 +728,9 @@ class traktPlayer(xbmc.Player):
             logger.debug(
                 "[traktPlayer] onAVStarted() - activePlayers: %s" % activePlayers
             )
+            if not activePlayers:
+                logger.debug("[traktPlayer] onAVStarted() - No active players, bailing.")
+                return
             playerId = int(activePlayers[0]["playerid"])
             logger.debug(
                 "[traktPlayer] onAVStarted() - Doing Player.GetItem kodiJsonRequest"
@@ -532,14 +752,14 @@ class traktPlayer(xbmc.Player):
                 _filename = None
                 try:
                     _filename = self.getPlayingFile()
-                except:  # noqa: E722
+                except Exception:
                     logger.debug(
                         "[traktPlayer] onAVStarted() - Exception trying to get playing filename, player suddenly stopped."
                     )
                     return
 
-                custom_proprties = result["item"].get("customproperties")
-                if custom_proprties and "script.trakt.exclude" in custom_proprties:
+                custom_properties = result["item"].get("customproperties")
+                if custom_properties and "script.trakt.exclude" in custom_properties:
                     logger.debug(
                         "[traktPlayer] onAVStarted() - '%s' has exclusion property, ignoring."
                         % _filename
@@ -558,19 +778,19 @@ class traktPlayer(xbmc.Player):
                         "[traktPlayer] Setting is enabled to try scrobbling mythtv pvr recording, if necessary."
                     )
 
-                self.type = result["item"]["type"]
+                self.media_type = result["item"]["type"]
                 data = {"action": "started"}
                 # check type of item
-                if "id" not in result["item"] or self.type == "channel":
+                if "id" not in result["item"] or self.media_type == "channel":
                     # get non-library details by infolabel (ie. PVR, plugins, etc.)
-                    self.type, data = kodiUtilities.getInfoLabelDetails(result)
-                elif self.type == "episode" or self.type == "movie":
+                    self.media_type, data = kodiUtilities.getInfoLabelDetails(result)
+                elif self.media_type == "episode" or self.media_type == "movie":
                     # get library id
-                    self.id = result["item"]["id"]
-                    data["id"] = self.id
-                    data["type"] = self.type
+                    self.media_id = result["item"]["id"]
+                    data["id"] = self.media_id
+                    data["type"] = self.media_type
 
-                    if self.type == "episode":
+                    if self.media_type == "episode":
                         logger.debug(
                             "[traktPlayer] onAVStarted() - Doing multi-part episode check."
                         )
@@ -579,7 +799,7 @@ class traktPlayer(xbmc.Player):
                                 "jsonrpc": "2.0",
                                 "method": "VideoLibrary.GetEpisodeDetails",
                                 "params": {
-                                    "episodeid": self.id,
+                                    "episodeid": self.media_id,
                                     "properties": [
                                         "tvshowid",
                                         "season",
@@ -636,7 +856,7 @@ class traktPlayer(xbmc.Player):
                                         )
                 elif (
                     kodiUtilities.getSettingAsBool("scrobble_mythtv_pvr")
-                    and self.type == "unknown"
+                    and self.media_type == "unknown"
                     and result["item"]["label"]
                 ):
                     # If we have label/id but no show type, then this might be a PVR recording.
@@ -767,7 +987,7 @@ class traktPlayer(xbmc.Player):
                     except ValueError:
                         epYear = None
                     logger.debug(
-                        "[traktPlayer] onAVStarted() - verified episode year: %d"
+                        "[traktPlayer] onAVStarted() - verified episode year: %s"
                         % epYear
                     )
                     # All right, now we have the show name, episode name, and (maybe) episode year. All good, but useless for
@@ -811,7 +1031,7 @@ class traktPlayer(xbmc.Player):
                             )
                         else:
                             # OK, now we have a episode object to work with.
-                            self.type = "episode"
+                            self.media_type = "episode"
                             data["type"] = "episode"
                             # You'd think we could just use the episode key that Trakt just returned to us, but the scrobbler
                             # function (see scrobber.py) only understands the show key plus season/episode values.
@@ -853,7 +1073,7 @@ class traktPlayer(xbmc.Player):
                             data["video_ids"] = showKeys
                             # Now to find the episode. There's no search function to look for an episode within a show, but
                             # we can get all the episodes and look for the title.
-                            while not data["season"]:
+                            if not data["season"]:
                                 logger.debug(
                                     "[traktPlayer] onAVStarted() - Querying for all seasons/episodes of this show"
                                 )
@@ -867,7 +1087,6 @@ class traktPlayer(xbmc.Player):
                                     logger.debug(
                                         "[traktPlayer] onAVStarted() - No response received"
                                     )
-                                    break
                                 else:
                                     # Got the list back. Go through each season.
                                     logger.debug(
@@ -887,7 +1106,7 @@ class traktPlayer(xbmc.Player):
                                                 thisEpTitle = eachSeason.episodes[
                                                     eachEpisodeNumber
                                                 ].title
-                                            except:  # noqa: E722
+                                            except Exception:
                                                 thisEpTitle = None
                                             logger.debug(
                                                 "[traktPlayer] onAVStarted() - Checking episode number %d with title %s"
@@ -924,7 +1143,7 @@ class traktPlayer(xbmc.Player):
                 else:
                     logger.debug(
                         "[traktPlayer] onAVStarted() - Video type '%s' unrecognized, skipping."
-                        % self.type
+                        % self.media_type
                     )
                     return
 

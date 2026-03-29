@@ -1,6 +1,3 @@
-# -*- coding: utf-8 -*-
-#
-
 import difflib
 import time
 import re
@@ -88,6 +85,67 @@ def __findInList(list_data: List, case_sensitive: bool = True, **kwargs) -> Opti
     return None
 
 
+def _buildMediaIndex(listToSearch: List) -> Dict:
+    """Build O(1) lookup indexes from a media list, keyed by various ID types."""
+    index: Dict = {"imdb": {}, "tmdb": {}, "tvdb": {}, "title_year": {}, "title": {}}
+    for item in listToSearch:
+        ids = item.get("ids", {})
+        imdb = ids.get("imdb")
+        if imdb and str(imdb).startswith("tt"):
+            index["imdb"][str(imdb)] = item
+        tmdb = ids.get("tmdb")
+        if tmdb:
+            index["tmdb"][str(tmdb)] = item
+        tvdb = ids.get("tvdb")
+        if tvdb:
+            index["tvdb"][str(tvdb)] = item
+        title = item.get("title")
+        if title:
+            year = item.get("year")
+            if year is not None:
+                index["title_year"][(str(title), str(year))] = item
+            # last-resort title-only match (last writer wins, same as linear scan)
+            index["title"][str(title)] = item
+    return index
+
+
+def _indexedFind(mediaObjectToMatch: Dict, index: Dict, matchByTitleAndYear: bool) -> Optional[Dict]:
+    """O(1) replacement for findMediaObject using a pre-built index."""
+    ids = mediaObjectToMatch.get("ids", {})
+
+    imdb = ids.get("imdb")
+    if imdb and str(imdb).startswith("tt"):
+        result = index["imdb"].get(str(imdb))
+        if result is not None:
+            return result
+
+    tmdb = ids.get("tmdb")
+    if tmdb:
+        result = index["tmdb"].get(str(tmdb))
+        if result is not None:
+            return result
+
+    tvdb = ids.get("tvdb")
+    if tvdb:
+        result = index["tvdb"].get(str(tvdb))
+        if result is not None:
+            return result
+
+    if matchByTitleAndYear:
+        title = mediaObjectToMatch.get("title")
+        year = mediaObjectToMatch.get("year")
+        if title is not None and year is not None:
+            result = index["title_year"].get((str(title), str(year)))
+            if result is not None:
+                return result
+        if title is not None:
+            result = index["title"].get(str(title))
+            if result is not None:
+                return result
+
+    return None
+
+
 def findMediaObject(mediaObjectToMatch: Dict, listToSearch: List, matchByTitleAndYear: bool) -> Optional[Dict]:
     result = None
     if (
@@ -128,7 +186,7 @@ def findMediaObject(mediaObjectToMatch: Dict, listToSearch: List, matchByTitleAn
                 year=mediaObjectToMatch["year"],
             )
         # match only by title, as some items don't have a year on trakt
-        elif result is None and "title" in mediaObjectToMatch:
+        if result is None and "title" in mediaObjectToMatch:
             result = __findInList(listToSearch, title=mediaObjectToMatch["title"])
 
     return result
@@ -174,7 +232,7 @@ def findMovieMatchInList(id: str, listToMatch: Dict, idType: str) -> Dict:
     return next(
         (
             item.to_dict()
-            for key, item in list(listToMatch.items())
+            for key, item in listToMatch.items()
             if any(idType in key for key, value in item.keys if str(value) == str(id))
         ),
         {},
@@ -185,7 +243,7 @@ def findShowMatchInList(id: str, listToMatch: Dict, idType: str) -> Dict:
     return next(
         (
             item.to_dict()
-            for key, item in list(listToMatch.items())
+            for key, item in listToMatch.items()
             if any(idType in key for key, value in item.keys if str(value) == str(id))
         ),
         {},
@@ -228,7 +286,7 @@ def convertDateTimeToUTC(toConvert: Optional[str]) -> Optional[str]:
             logger.debug(
                 "convertDateTimeToUTC() ValueError: movie/show was collected/watched outside of the unix timespan. Fallback to datetime utcnow"
             )
-            utc = datetime.utcnow()
+            utc = datetime.now(tzutc())
         return str(utc)
     else:
         return toConvert
@@ -290,10 +348,13 @@ def best_id(ids: Dict, type: str) -> Tuple[str, str]:
         return ids["tmdb"], "tmdb"
     elif "tvdb" in ids:
         return ids["tvdb"], "tvdb"
+    elif "imdb" in ids:
+        return ids["imdb"], "imdb"
     elif "tvrage" in ids:
         return ids["tvrage"], "tvrage"
     elif "slug" in ids:
         return ids["slug"], "slug"
+    return None, None
 
 
 def checkExcludePath(excludePath: str, excludePathEnabled: bool, fullpath: str, x: int) -> bool:
@@ -344,6 +405,14 @@ def sanitizeShows(shows: Dict) -> None:
                     del episode["ids"]["episodeid"]
 
 
+def _copy_episode(episode):
+    """Shallow copy episode dict, including the nested ids dict."""
+    ep = dict(episode)
+    if "ids" in ep:
+        ep["ids"] = dict(ep["ids"])
+    return ep
+
+
 def compareMovies(
     movies_col1: List,
     movies_col2: List,
@@ -354,44 +423,47 @@ def compareMovies(
     rating: bool = False,
 ) -> List:
     movies = []
+    col2_index = _buildMediaIndex(movies_col2)
     for movie_col1 in movies_col1:
         if movie_col1:
-            movie_col2 = findMediaObject(movie_col1, movies_col2, matchByTitleAndYear)
+            movie_col2 = _indexedFind(movie_col1, col2_index, matchByTitleAndYear)
             # logger.debug("movie_col1 %s" % movie_col1)
             # logger.debug("movie_col2 %s" % movie_col2)
 
             if movie_col2:  # match found
                 if watched:  # are we looking for watched items
                     if movie_col2["watched"] == 0 and movie_col1["watched"] == 1:
-                        if "movieid" not in movie_col1:
-                            movie_col1["movieid"] = movie_col2["movieid"]
-                        movies.append(movie_col1)
+                        movie = dict(movie_col1)
+                        if "movieid" not in movie:
+                            movie["movieid"] = movie_col2["movieid"]
+                        movies.append(movie)
                 elif playback:
-                    if "movieid" not in movie_col1:
-                        movie_col1["movieid"] = movie_col2["movieid"]
-                    movie_col1["runtime"] = movie_col2["runtime"]
-                    movies.append(movie_col1)
+                    movie = dict(movie_col1)
+                    if "movieid" not in movie:
+                        movie["movieid"] = movie_col2["movieid"]
+                    movie["runtime"] = movie_col2["runtime"]
+                    movies.append(movie)
                 elif rating:
-                    if (
-                        "rating" in movie_col1
-                        and movie_col1["rating"] != 0
-                        and ("rating" not in movie_col2 or movie_col2["rating"] == 0)
-                    ):
-                        if "movieid" not in movie_col1:
-                            movie_col1["movieid"] = movie_col2["movieid"]
-                        movies.append(movie_col1)
+                    col1_rating = movie_col1.get("rating", 0)
+                    col2_rating = movie_col2.get("rating", 0)
+                    if col1_rating != col2_rating:
+                        movie = dict(movie_col1)
+                        movie["rating"] = col1_rating
+                        if "movieid" not in movie:
+                            movie["movieid"] = movie_col2["movieid"]
+                        movies.append(movie)
                 else:
                     if "collected" in movie_col2 and not movie_col2["collected"]:
-                        movies.append(movie_col1)
+                        movies.append(dict(movie_col1))
             else:  # no match found
                 if not restrict:
                     if "collected" in movie_col1 and movie_col1["collected"]:
                         if watched and (movie_col1["watched"] == 1):
-                            movies.append(movie_col1)
+                            movies.append(dict(movie_col1))
                         elif rating and movie_col1["rating"] != 0:
-                            movies.append(movie_col1)
+                            movies.append(dict(movie_col1))
                         elif not watched and not rating:
-                            movies.append(movie_col1)
+                            movies.append(dict(movie_col1))
     return movies
 
 
@@ -401,10 +473,11 @@ def compareShows(
     shows = []
     # logger.debug("shows_col1 %s" % shows_col1)
     # logger.debug("shows_col2 %s" % shows_col2)
+    col2_index = _buildMediaIndex(shows_col2["shows"])
     for show_col1 in shows_col1["shows"]:
         if show_col1:
-            show_col2 = findMediaObject(
-                show_col1, shows_col2["shows"], matchByTitleAndYear
+            show_col2 = _indexedFind(
+                show_col1, col2_index, matchByTitleAndYear
             )
             # logger.debug("show_col1 %s" % show_col1)
             # logger.debug("show_col2 %s" % show_col2)
@@ -422,14 +495,12 @@ def compareShows(
                 if "tvshowid" in show_col2:
                     show["tvshowid"] = show_col2["tvshowid"]
 
-                if (
-                    rating
-                    and "rating" in show_col1
-                    and show_col1["rating"] != 0
-                    and ("rating" not in show_col2 or show_col2["rating"] == 0)
-                ):
-                    show["rating"] = show_col1["rating"]
-                    shows.append(show)
+                if rating:
+                    col1_rating = show_col1.get("rating", 0)
+                    col2_rating = show_col2.get("rating", 0)
+                    if col1_rating != col2_rating:
+                        show["rating"] = col1_rating
+                        shows.append(show)
                 elif not rating:
                     shows.append(show)
             else:
@@ -459,17 +530,19 @@ def compareEpisodes(
     matchByTitleAndYear: bool,
     watched: bool = False,
     restrict: bool = False,
-    collected: Union[Dict, bool] = False,
+    collected: Optional[Dict] = None,
     playback: bool = False,
     rating: bool = False,
 ) -> Dict:
     shows = []
     # logger.debug("epi shows_col1 %s" % shows_col1)
     # logger.debug("epi shows_col2 %s" % shows_col2)
+    col2_index = _buildMediaIndex(shows_col2["shows"])
+    collected_index = _buildMediaIndex(collected["shows"]) if collected else None
     for show_col1 in shows_col1["shows"]:
         if show_col1:
-            show_col2 = findMediaObject(
-                show_col1, shows_col2["shows"], matchByTitleAndYear
+            show_col2 = _indexedFind(
+                show_col1, col2_index, matchByTitleAndYear
             )
             # logger.debug("show_col1 %s" % show_col1)
             # logger.debug("show_col2 %s" % show_col2)
@@ -489,18 +562,11 @@ def compareEpisodes(
                             if len(t) > 0:
                                 eps = {}
                                 for ep in t:
-                                    eps[ep] = a[ep]
+                                    eps[ep] = _copy_episode(a[ep])
                                     if "episodeid" in season_col2[season][ep]["ids"]:
-                                        if "ids" in eps:
-                                            eps[ep]["ids"]["episodeid"] = season_col2[
-                                                season
-                                            ][ep]["ids"]["episodeid"]
-                                        else:
-                                            eps[ep]["ids"] = {
-                                                "episodeid": season_col2[season][ep][
-                                                    "ids"
-                                                ]["episodeid"]
-                                            }
+                                        eps[ep]["ids"]["episodeid"] = season_col2[
+                                            season
+                                        ][ep]["ids"]["episodeid"]
                                     eps[ep]["runtime"] = season_col2[season][ep][
                                         "runtime"
                                     ]
@@ -510,36 +576,28 @@ def compareEpisodes(
                             if len(t) > 0:
                                 eps = {}
                                 for ep in t:
-                                    if (
-                                        "rating" in a[ep]
-                                        and a[ep]["rating"] != 0
-                                        and season_col2[season][ep]["rating"] == 0
-                                    ):
-                                        eps[ep] = a[ep]
+                                    col1_rating = a[ep].get("rating", 0)
+                                    col2_rating = season_col2[season][ep].get("rating", 0)
+                                    if col1_rating != col2_rating:
+                                        eps[ep] = _copy_episode(a[ep])
+                                        eps[ep]["rating"] = col1_rating
                                         if (
                                             "episodeid"
                                             in season_col2[season][ep]["ids"]
                                         ):
-                                            if "ids" in eps:
-                                                eps[ep]["ids"]["episodeid"] = (
-                                                    season_col2[season][ep]["ids"][
-                                                        "episodeid"
-                                                    ]
-                                                )
-                                            else:
-                                                eps[ep]["ids"] = {
-                                                    "episodeid": season_col2[season][
-                                                        ep
-                                                    ]["ids"]["episodeid"]
-                                                }
+                                            eps[ep]["ids"][
+                                                "episodeid"
+                                            ] = season_col2[season][ep]["ids"][
+                                                "episodeid"
+                                            ]
                                 if len(eps) > 0:
                                     season_diff[season] = eps
                         elif len(diff) > 0:
                             if restrict:
                                 # get all the episodes that we have in Kodi, watched or not - update kodi
-                                collectedShow = findMediaObject(
-                                    show_col1, collected["shows"], matchByTitleAndYear
-                                )
+                                collectedShow = _indexedFind(
+                                    show_col1, collected_index, matchByTitleAndYear
+                                ) if collected_index else None
                                 # logger.debug("collected %s" % collectedShow)
                                 collectedSeasons = __getEpisodes(
                                     collectedShow["seasons"]
@@ -552,34 +610,30 @@ def compareEpisodes(
                                 if len(t) > 0:
                                     eps = {}
                                     for ep in t:
-                                        eps[ep] = a[ep]
+                                        eps[ep] = _copy_episode(a[ep])
                                         if (
                                             "episodeid"
                                             in collectedSeasons[season][ep]["ids"]
                                         ):
-                                            if "ids" in eps:
-                                                eps[ep]["ids"]["episodeid"] = (
-                                                    collectedSeasons[season][ep]["ids"][
-                                                        "episodeid"
-                                                    ]
-                                                )
-                                            else:
-                                                eps[ep]["ids"] = {
-                                                    "episodeid": collectedSeasons[
-                                                        season
-                                                    ][ep]["ids"]["episodeid"]
-                                                }
+                                            eps[ep]["ids"][
+                                                "episodeid"
+                                            ] = collectedSeasons[season][ep]["ids"][
+                                                "episodeid"
+                                            ]
                                     season_diff[season] = eps
                             else:
                                 eps = {}
                                 for ep in diff:
-                                    eps[ep] = a[ep]
+                                    eps[ep] = _copy_episode(a[ep])
                                 if len(eps) > 0:
                                     season_diff[season] = eps
                     else:
                         if not restrict and not rating:
                             if len(a) > 0:
-                                season_diff[season] = a
+                                season_diff[season] = {
+                                    ep_num: _copy_episode(ep)
+                                    for ep_num, ep in a.items()
+                                }
                 # logger.debug("season_diff %s" % season_diff)
                 if len(season_diff) > 0:
                     # logger.debug("Season_diff")
@@ -619,11 +673,11 @@ def compareEpisodes(
                             episodes = []
                             for episodeKey in seasonKey["episodes"]:
                                 if watched and (episodeKey["watched"] == 1):
-                                    episodes.append(episodeKey)
+                                    episodes.append(_copy_episode(episodeKey))
                                 elif rating and episodeKey["rating"] != 0:
-                                    episodes.append(episodeKey)
+                                    episodes.append(_copy_episode(episodeKey))
                                 elif not watched and not rating:
-                                    episodes.append(episodeKey)
+                                    episodes.append(_copy_episode(episodeKey))
                             if len(episodes) > 0:
                                 show["seasons"].append(
                                     {
@@ -632,12 +686,75 @@ def compareEpisodes(
                                     }
                                 )
 
-                        if "tvshowid" in show_col1:
-                            del show_col1["tvshowid"]
                         if countEpisodes([show]) > 0:
                             shows.append(show)
     result = {"shows": shows}
     return result
+
+
+def filterRewatchEpisodes(shows_to_update: Dict, trakt_shows: Dict) -> Dict:
+    """Filter out episodes that were watched before a show's rewatch reset point.
+
+    For shows where the user has started a rewatch on Trakt (reset_at is set),
+    only keep episodes whose last_watched_at is on or after reset_at.
+    """
+    # Build lookup: any show ID -> reset_at
+    reset_lookup = {}
+    for show in trakt_shows.get("shows", []):
+        reset_at = show.get("reset_at")
+        if not reset_at:
+            continue
+        if show.get("ids"):
+            for id_type, id_val in show["ids"].items():
+                if id_val:
+                    reset_lookup[(id_type, str(id_val))] = reset_at
+
+    if not reset_lookup:
+        return shows_to_update
+
+    filtered_shows = []
+    for show in shows_to_update["shows"]:
+        # Find reset_at for this show
+        reset_at = None
+        if show.get("ids"):
+            for id_type, id_val in show["ids"].items():
+                if id_val:
+                    reset_at = reset_lookup.get((id_type, str(id_val)))
+                    if reset_at:
+                        break
+
+        if not reset_at:
+            filtered_shows.append(show)
+            continue
+
+        # Filter episodes: only keep those watched during/after the rewatch
+        filtered_seasons = []
+        show_filtered = 0
+        for season in show["seasons"]:
+            filtered_episodes = []
+            for episode in season["episodes"]:
+                ep_watched = episode.get("last_watched_at")
+                if ep_watched and ep_watched >= reset_at:
+                    filtered_episodes.append(episode)
+                else:
+                    show_filtered += 1
+            if filtered_episodes:
+                filtered_seasons.append(
+                    {"number": season["number"], "episodes": filtered_episodes}
+                )
+
+        if filtered_seasons:
+            show_copy = dict(show)
+            show_copy["seasons"] = filtered_seasons
+            filtered_shows.append(show_copy)
+
+        if show_filtered > 0:
+            logger.info(
+                "[Rewatch] Filtered %s: %i episode(s) predate reset_at %s"
+                % (show.get("title", "?"), show_filtered, reset_at)
+            )
+
+    return {"shows": filtered_shows}
 
 
 def countEpisodes(shows: Union[Dict, List], collection: bool = True) -> int:
@@ -670,20 +787,7 @@ def __getEpisodes(seasons: List) -> Dict:
     return data
 
 
-def checkIfNewVersion(old: str, new: str) -> bool:
-    # Check if old is empty, it might be the first time we check
-    if old == "":
-        return True
-    # Major
-    if old[0] < new[0]:
-        return True
-    # Minor
-    if old[1] < new[1]:
-        return True
-    # Revision
-    if old[2] < new[2]:
-        return True
-    return False
+
 
 
 def _to_sec(timedelta_string: str, factors: Tuple[int, ...] = (1, 60, 3600, 86400)) -> float:
@@ -695,8 +799,6 @@ def _to_sec(timedelta_string: str, factors: Tuple[int, ...] = (1, 60, 3600, 8640
 
 
 def _fuzzyMatch(string1: str, string2: str, match_percent: float = 55.0) -> bool:
-    s = difflib.SequenceMatcher(None, string1, string2)
-    s.find_longest_match(0, len(string1), 0, len(string2))
     return (
         difflib.SequenceMatcher(None, string1, string2).ratio() * 100
     ) >= match_percent

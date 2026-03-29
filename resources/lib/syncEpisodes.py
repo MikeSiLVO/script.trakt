@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-
 import copy
 import logging
 from typing import Dict, Tuple, Union, Optional, Any
@@ -130,7 +128,7 @@ class SyncEpisodes:
                 "id": 0,
             }
         )
-        if data["limits"]["total"] == 0:
+        if not data or data["limits"]["total"] == 0:
             logger.debug("[Episodes Sync] Kodi json request was empty.")
             return None, None
 
@@ -204,7 +202,7 @@ class SyncEpisodes:
             if "tvshowid" in show_col1:
                 del show_col1["tvshowid"]
 
-            showWatched = copy.deepcopy(show)
+            showWatched = dict(show)
             data2 = copy.deepcopy(data)
             show["seasons"] = kodiUtilities.kodiRpcToTraktMediaObjects(data)
 
@@ -233,24 +231,19 @@ class SyncEpisodes:
             traktShowsCollected = self.sync.traktapi.getShowsCollected(
                 traktShowsCollected
             )
-            traktShowsCollected = list(traktShowsCollected.items())
-
             self.sync.UpdateProgress(12, line2=kodiUtilities.getString(32101))
             traktShowsWatched = {}
             traktShowsWatched = self.sync.traktapi.getShowsWatched(traktShowsWatched)
-            traktShowsWatched = list(traktShowsWatched.items())
 
             traktShowsRated = {}
             traktEpisodesRated = {}
 
-            if kodiUtilities.getSettingAsBool("trakt_sync_ratings"):
+            if kodiUtilities.getSettingAsBool("sync_ratings_to_trakt") or kodiUtilities.getSettingAsBool("sync_ratings_to_kodi"):
                 traktShowsRated = self.sync.traktapi.getShowsRated(traktShowsRated)
-                traktShowsRated = list(traktShowsRated.items())
 
                 traktEpisodesRated = self.sync.traktapi.getEpisodesRated(
                     traktEpisodesRated
                 )
-                traktEpisodesRated = list(traktEpisodesRated.items())
 
         except Exception:
             logger.debug(
@@ -261,7 +254,7 @@ class SyncEpisodes:
         i = 0
         x = float(len(traktShowsCollected))
         showsCollected = {"shows": []}
-        for _, show in traktShowsCollected:
+        for _, show in traktShowsCollected.items():
             i += 1
             y = ((i / x) * 4) + 12
             self.sync.UpdateProgress(
@@ -276,7 +269,7 @@ class SyncEpisodes:
         i = 0
         x = float(len(traktShowsWatched))
         showsWatched = {"shows": []}
-        for _, show in traktShowsWatched:
+        for _, show in traktShowsWatched.items():
             i += 1
             y = ((i / x) * 4) + 16
             self.sync.UpdateProgress(
@@ -291,7 +284,7 @@ class SyncEpisodes:
         i = 0
         x = float(len(traktShowsRated))
         showsRated = {"shows": []}
-        for _, show in traktShowsRated:
+        for _, show in traktShowsRated.items():
             i += 1
             y = ((i / x) * 4) + 20
             self.sync.UpdateProgress(
@@ -306,7 +299,7 @@ class SyncEpisodes:
         i = 0
         x = float(len(traktEpisodesRated))
         episodesRated = {"shows": []}
-        for _, show in traktEpisodesRated:
+        for _, show in traktEpisodesRated.items():
             i += 1
             y = ((i / x) * 4) + 20
             self.sync.UpdateProgress(
@@ -366,18 +359,14 @@ class SyncEpisodes:
         self, kodiShows: Dict, traktShows: Dict, fromPercent: int, toPercent: int
     ) -> None:
         if (
-            kodiUtilities.getSettingAsBool("add_episodes_to_trakt")
+            kodiUtilities.getSettingAsBool("sync_collection_episodes_to_trakt")
             and not self.sync.IsCanceled()
         ):
-            addTraktShows = copy.deepcopy(traktShows)
-            addKodiShows = copy.deepcopy(kodiShows)
-
-            tmpTraktShowsAdd = utilities.compareEpisodes(
-                addKodiShows,
-                addTraktShows,
+            traktShowsAdd = utilities.compareEpisodes(
+                kodiShows,
+                traktShows,
                 kodiUtilities.getSettingAsBool("scrobble_fallback"),
             )
-            traktShowsAdd = copy.deepcopy(tmpTraktShowsAdd)
             utilities.sanitizeShows(traktShowsAdd)
             # logger.debug("traktShowsAdd %s" % traktShowsAdd)
 
@@ -430,7 +419,7 @@ class SyncEpisodes:
                     self.sync.traktapi.addToCollection(request)
                 except Exception as ex:
                     message = utilities.createError(ex)
-                    logging.fatal(message)
+                    logger.fatal(message)
                     errorcount += 1
 
             logger.debug("[traktAddEpisodes] Finished with %d error(s)" % errorcount)
@@ -444,15 +433,12 @@ class SyncEpisodes:
         self, traktShows: Dict, kodiShows: Dict, fromPercent: int, toPercent: int
     ) -> None:
         if (
-            kodiUtilities.getSettingAsBool("clean_trakt_episodes")
+            kodiUtilities.getSettingAsBool("sync_clean_collection_episodes_to_trakt")
             and not self.sync.IsCanceled()
         ):
-            removeTraktShows = copy.deepcopy(traktShows)
-            removeKodiShows = copy.deepcopy(kodiShows)
-
             traktShowsRemove = utilities.compareEpisodes(
-                removeTraktShows,
-                removeKodiShows,
+                traktShows,
+                kodiShows,
                 kodiUtilities.getSettingAsBool("scrobble_fallback"),
             )
             utilities.sanitizeShows(traktShowsRemove)
@@ -490,7 +476,7 @@ class SyncEpisodes:
                 self.sync.traktapi.removeFromCollection(traktShowsRemove)
             except Exception as ex:
                 message = utilities.createError(ex)
-                logging.fatal(message)
+                logger.fatal(message)
 
             self.sync.UpdateProgress(
                 toPercent,
@@ -502,15 +488,12 @@ class SyncEpisodes:
         self, kodiShows: Dict, traktShows: Dict, fromPercent: int, toPercent: int
     ) -> None:
         if (
-            kodiUtilities.getSettingAsBool("trakt_episode_playcount")
+            kodiUtilities.getSettingAsBool("sync_playcount_episodes_to_trakt")
             and not self.sync.IsCanceled()
         ):
-            updateTraktTraktShows = copy.deepcopy(traktShows)
-            updateTraktKodiShows = copy.deepcopy(kodiShows)
-
             traktShowsUpdate = utilities.compareEpisodes(
-                updateTraktKodiShows,
-                updateTraktTraktShows,
+                kodiShows,
+                traktShows,
                 kodiUtilities.getSettingAsBool("scrobble_fallback"),
                 watched=True,
             )
@@ -563,7 +546,7 @@ class SyncEpisodes:
                     self.sync.traktapi.addToHistory(s)
                 except Exception as ex:
                     message = utilities.createError(ex)
-                    logging.fatal(message)
+                    logger.fatal(message)
                     errorcount += 1
 
             logger.debug("[traktUpdateEpisodes] Finished with %d error(s)" % errorcount)
@@ -580,17 +563,19 @@ class SyncEpisodes:
             kodiUtilities.getSettingAsBool("kodi_episode_playcount")
             and not self.sync.IsCanceled()
         ):
-            updateKodiTraktShows = copy.deepcopy(traktShows)
-            updateKodiKodiShows = copy.deepcopy(kodiShows)
-
             kodiShowsUpdate = utilities.compareEpisodes(
-                updateKodiTraktShows,
-                updateKodiKodiShows,
+                traktShows,
+                kodiShows,
                 kodiUtilities.getSettingAsBool("scrobble_fallback"),
                 watched=True,
                 restrict=True,
                 collected=kodiShowsCollected,
             )
+
+            if kodiUtilities.getSettingAsBool("rewatch_aware_sync") or self.sync.force_rewatch:
+                kodiShowsUpdate = utilities.filterRewatchEpisodes(
+                    kodiShowsUpdate, traktShows
+                )
 
             if len(kodiShowsUpdate["shows"]) == 0:
                 self.sync.UpdateProgress(
@@ -667,11 +652,9 @@ class SyncEpisodes:
             and traktShows
             and not self.sync.IsCanceled()
         ):
-            updateKodiTraktShows = copy.deepcopy(traktShows)
-            updateKodiKodiShows = copy.deepcopy(kodiShows)
             kodiShowsUpdate = utilities.compareEpisodes(
-                updateKodiTraktShows,
-                updateKodiKodiShows,
+                traktShows,
+                kodiShows,
                 kodiUtilities.getSettingAsBool("scrobble_fallback"),
                 restrict=True,
                 playback=True,
@@ -765,16 +748,13 @@ class SyncEpisodes:
 
     def __syncShowsRatings(self, traktShows: Dict, kodiShows: Dict, fromPercent: int, toPercent: int) -> None:
         if (
-            kodiUtilities.getSettingAsBool("trakt_sync_ratings")
+            kodiUtilities.getSettingAsBool("sync_ratings_to_trakt")
             and traktShows
             and not self.sync.IsCanceled()
         ):
-            updateKodiTraktShows = copy.deepcopy(traktShows)
-            updateKodiKodiShows = copy.deepcopy(kodiShows)
-
             traktShowsToUpdate = utilities.compareShows(
-                updateKodiKodiShows,
-                updateKodiTraktShows,
+                kodiShows,
+                traktShows,
                 kodiUtilities.getSettingAsBool("scrobble_fallback"),
                 rating=True,
             )
@@ -798,10 +778,15 @@ class SyncEpisodes:
 
                 self.sync.traktapi.addRating(traktShowsToUpdate)
 
+        if (
+            kodiUtilities.getSettingAsBool("sync_ratings_to_kodi")
+            and traktShows
+            and not self.sync.IsCanceled()
+        ):
             # needs to be restricted, because we can't add a rating to an episode which is not in our Kodi collection
             kodiShowsUpdate = utilities.compareShows(
-                updateKodiTraktShows,
-                updateKodiKodiShows,
+                traktShows,
+                kodiShows,
                 kodiUtilities.getSettingAsBool("scrobble_fallback"),
                 rating=True,
                 restrict=True,
@@ -834,7 +819,7 @@ class SyncEpisodes:
                             "method": "VideoLibrary.SetTVShowDetails",
                             "params": {
                                 "tvshowid": shows[i]["tvshowid"],
-                                "userrating": shows[i]["rating"],
+                                "userrating": int(shows[i]["rating"]),
                             },
                         }
                         for i in range(len(shows))
@@ -863,16 +848,13 @@ class SyncEpisodes:
 
     def __syncEpisodeRatings(self, traktShows: Dict, kodiShows: Dict, fromPercent: int, toPercent: int) -> None:
         if (
-            kodiUtilities.getSettingAsBool("trakt_sync_ratings")
+            kodiUtilities.getSettingAsBool("sync_ratings_to_trakt")
             and traktShows
             and not self.sync.IsCanceled()
         ):
-            updateKodiTraktShows = copy.deepcopy(traktShows)
-            updateKodiKodiShows = copy.deepcopy(kodiShows)
-
             traktShowsToUpdate = utilities.compareEpisodes(
-                updateKodiKodiShows,
-                updateKodiTraktShows,
+                kodiShows,
+                traktShows,
                 kodiUtilities.getSettingAsBool("scrobble_fallback"),
                 rating=True,
             )
@@ -895,9 +877,14 @@ class SyncEpisodes:
                 )
                 self.sync.traktapi.addRating(traktShowsToUpdate)
 
+        if (
+            kodiUtilities.getSettingAsBool("sync_ratings_to_kodi")
+            and traktShows
+            and not self.sync.IsCanceled()
+        ):
             kodiShowsUpdate = utilities.compareEpisodes(
-                updateKodiTraktShows,
-                updateKodiKodiShows,
+                traktShows,
+                kodiShows,
                 kodiUtilities.getSettingAsBool("scrobble_fallback"),
                 restrict=True,
                 rating=True,
@@ -939,7 +926,7 @@ class SyncEpisodes:
                             "method": "VideoLibrary.SetEpisodeDetails",
                             "params": {
                                 "episodeid": episodes[i]["episodeid"],
-                                "userrating": episodes[i]["rating"],
+                                "userrating": int(episodes[i]["rating"]),
                             },
                         }
                         for i in range(len(episodes))

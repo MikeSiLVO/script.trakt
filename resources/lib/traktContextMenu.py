@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-
 import xbmcaddon
 import xbmcgui
 from typing import List, Optional, Any
@@ -25,7 +23,7 @@ class traktContextMenu(xbmcgui.WindowXMLDialog):
     media_type: str
 
     def __new__(cls, media_type: Optional[str] = None, buttons: Optional[List[str]] = None) -> Any:
-        return super(traktContextMenu, cls).__new__(
+        return super().__new__(
             cls,
             "script-trakt-ContextMenu.xml",
             __addon__.getAddonInfo("path"),
@@ -36,7 +34,7 @@ class traktContextMenu(xbmcgui.WindowXMLDialog):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         self.buttons = kwargs["buttons"]
         self.media_type = kwargs["media_type"]
-        super(traktContextMenu, self).__init__()
+        super().__init__()
 
     def onInit(self) -> None:
         mange_string = (
@@ -56,6 +54,7 @@ class traktContextMenu(xbmcgui.WindowXMLDialog):
             getString(32136),
             rate_string,
             getString(32140),
+            getString(32194),
             getString(32141),
             getString(32142),
             getString(32143),
@@ -66,6 +65,7 @@ class traktContextMenu(xbmcgui.WindowXMLDialog):
             "addtowatchlist",
             "rate",
             "togglewatched",
+            "syncrewatch",
             "managelists",
             "updatetags",
             "sync",
